@@ -20,6 +20,7 @@ export async function POST(req: NextRequest) {
     const normalized = [];
     for (const event of events) {
       if (!event || typeof event !== 'object') return NextResponse.json({ error: 'حدث غير صالح' }, { status: 400 });
+      if (event.user_id !== undefined && event.user_id !== session.id) return NextResponse.json({error:'سجل الدخول بنفس الحساب لمزامنة الأحداث المحفوظة'},{status:409});
       const { lat, lng, accuracy, event_type = 'ping', client_event_id, recorded_at } = event;
       const noLocation = event_type === 'clock_out' && lat == null && lng == null;
       if (!TYPES.has(event_type) || (!noLocation && (

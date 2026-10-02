@@ -43,6 +43,7 @@ try {
       return {client_event_id:randomUUID(),recorded_at:new Date(start+minute*60000).toISOString(),event_type:minute===0?'clock_in':minute===9?'clock_out':'ping',lat:b.lat,lng:b.lng,accuracy:3};
     });
     const invalid=await call('/api/attendance/ping',{method:'POST',token,data:{...events[0],lat:999}});assert.equal(invalid.status,400);pass('Invalid GPS rejected');
+    assert.equal((await call('/api/attendance/ping',{method:'POST',token,data:{...events[0],user_id:1}})).status,409);pass('Queued events cannot be uploaded under a different employee account');
     const future=await call('/api/attendance/ping',{method:'POST',token,data:{...events[0],recorded_at:new Date(Date.now()+3600000).toISOString()}});assert.equal(future.status,400);pass('Future timestamps rejected');
     const saved=await call('/api/attendance/ping',{method:'POST',token,data:{events:[...events].reverse()}});assert.equal(saved.status,200);assert.equal(saved.body.acknowledged.length,10);pass('Offline batch accepts original timestamps and out-of-order delivery');
     const duplicate=await call('/api/attendance/ping',{method:'POST',token,data:{events}});assert.equal(duplicate.status,200);assert.ok(duplicate.body.acknowledged.every(a=>a.duplicate));pass('Retry acknowledges duplicates without inserting them');
