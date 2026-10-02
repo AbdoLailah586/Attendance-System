@@ -22,15 +22,21 @@ import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeUnit;
+import androidx.work.*;
 
 final class TrackingStore extends SQLiteOpenHelper {
     static final String API = "https://attendance-system-joe-2026.vercel.app";
     private static TrackingStore instance;
     static final ExecutorService NETWORK = Executors.newSingleThreadExecutor();
     final SharedPreferences prefs;
+    final Context context;
+    private final AtomicBoolean syncing = new AtomicBoolean(false);
     private TrackingStore(Context context) {
         super(context, "attendance-events.db", null, 1);
         prefs = context.getSharedPreferences("attendance", Context.MODE_PRIVATE);
+        this.context = context;
     }
     static synchronized TrackingStore get(Context context) {
         if (instance == null) instance = new TrackingStore(context.getApplicationContext());
@@ -57,6 +63,7 @@ final class TrackingStore extends SQLiteOpenHelper {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, key());
         String encrypted = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP) + ":" + Base64.encodeToString(cipher.doFinal(token.getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
         if (!prefs.edit().putString("token", encrypted).putString("user", user).putString("error", "").commit()) throw new Exception("تعذر حفظ الجلسة");
+        scheduleSync();
     }
     synchronized String token() throws Exception {
         String encrypted = prefs.getString("token", ""); if (encrypted.isEmpty()) return "";
@@ -85,6 +92,7 @@ final class TrackingStore extends SQLiteOpenHelper {
         event.put("lng", location == null ? JSONObject.NULL : location.getLongitude());
         event.put("accuracy", location == null ? JSONObject.NULL : location.getAccuracy());
         getWritableDatabase().execSQL("INSERT INTO events(id,user_id,payload,time) VALUES(?,?,?,?)", new Object[]{id,userId(),event.toString(),time});
+        scheduleSync();
     }
     synchronized void recordPing(android.location.Location location) throws Exception {
         if (active()) record("ping", location);
@@ -95,6 +103,7 @@ final class TrackingStore extends SQLiteOpenHelper {
         prefs.edit().clear().commit();
     }
     void sync() {
+        if (!syncing.compareAndSet(false,true)) return;
         NETWORK.execute(() -> {
             try {
                 for (int batchNumber=0; batchNumber<20; batchNumber++) {
@@ -132,6 +141,14 @@ final class TrackingStore extends SQLiteOpenHelper {
                     } finally { connection.disconnect(); }
                 }
             } catch(Exception e) {error("تعذر الاتصال؛ الأحداث محفوظة للمزامنة لاحقًا");}
+            finally { syncing.set(false); }
         });
+    }
+    private void scheduleSync() {
+        Constraints network = new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build();
+        WorkManager.getInstance(context).enqueueUniqueWork("attendance-upload",ExistingWorkPolicy.KEEP,
+            new OneTimeWorkRequest.Builder(AttendanceUploadWorker.class).setConstraints(network).setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build());
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork("attendance-retry",ExistingPeriodicWorkPolicy.KEEP,
+            new PeriodicWorkRequest.Builder(AttendanceUploadWorker.class,15,TimeUnit.MINUTES).setConstraints(network).build());
     }
 }

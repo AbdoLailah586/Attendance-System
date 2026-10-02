@@ -7,7 +7,9 @@
   <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
   <string>نحتاج موقعك في الخلفية أثناء الشيفت لحساب وقت العمل والخروج حتى مع قفل الشاشة. يتوقف التتبع عند تسجيل الانصراف.</string>
   <key>UIBackgroundModes</key>
-  <array><string>location</string></array>
+  <array><string>location</string><string>processing</string></array>
+  <key>BGTaskSchedulerPermittedIdentifiers</key>
+  <array><string>com.joestore.attendance.upload</string></array>
   <key>CAPACITOR_DEBUG</key>
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>

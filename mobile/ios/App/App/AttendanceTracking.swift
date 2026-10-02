@@ -3,6 +3,7 @@ import CoreLocation
 import Security
 import UIKit
 import Capacitor
+import BackgroundTasks
 
 // All state changes run on the main queue. The native queue survives a WebView
 // suspension, app restart, and network failures. Tokens live in the Keychain.
@@ -17,6 +18,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
     private var timeout: DispatchWorkItem?
     private var lastRecorded: Date = .distantPast
     private var queueError = ""
+    private var backgroundTask: BGProcessingTask?
     private var queueURL: URL {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return directory.appendingPathComponent("attendance-events.json")
@@ -78,6 +80,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         var values = URLResourceValues(); values.isExcludedFromBackup = true
         try excluded.setResourceValues(values)
         queue = events
+        if !queue.isEmpty { scheduleUpload() }
     }
     private func record(type: String, location: CLLocation?) throws {
         guard userID > 0 else { throw problem("سجل الدخول أولًا") }
@@ -151,7 +154,8 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
          "locationLabel": prefs.string(forKey: "attendance-location") ?? ""]
     }
     func sync() {
-        guard !uploading && !queue.isEmpty && !token().isEmpty && queueError.isEmpty else { return }
+        guard !uploading else { return }
+        guard !queue.isEmpty && !token().isEmpty && queueError.isEmpty else { finishBackgroundUpload(); return }
         uploading = true
         let batch = Array(queue.prefix(100))
         var request = URLRequest(url: api)
@@ -167,18 +171,38 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
                 self.uploading = false
                 guard error == nil, let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode), let data = data,
                       let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let accepted = result["acknowledged"] as? [[String: Any]] else {
-                    self.prefs.set("المزامنة مؤجلة؛ الأحداث محفوظة على الهاتف. تحقق من الاتصال والجلسة", forKey: "attendance-error"); return
+                    self.prefs.set("المزامنة مؤجلة؛ الأحداث محفوظة على الهاتف. تحقق من الاتصال والجلسة", forKey: "attendance-error"); self.finishBackgroundUpload(); return
                 }
                 let ids = Set(accepted.compactMap { $0["client_event_id"] as? String })
-                guard !ids.isEmpty else { return }
+                guard !ids.isEmpty else { self.finishBackgroundUpload(); return }
                 do {
                     try self.persist(self.queue.filter { !ids.contains($0["client_event_id"] as? String ?? "") })
                     self.prefs.removeObject(forKey: "attendance-error")
                     if let geo = result["location"] as? [String: Any], let name = geo["branch_name"] as? String { self.prefs.set(name, forKey: "attendance-location") }
-                    if !self.queue.isEmpty { self.sync() }
-                } catch { self.prefs.set(error.localizedDescription, forKey: "attendance-error") }
+                    if !self.queue.isEmpty { self.sync() } else { self.finishBackgroundUpload() }
+                } catch { self.prefs.set(error.localizedDescription, forKey: "attendance-error"); self.finishBackgroundUpload() }
             }
         }.resume()
+    }
+    func registerBackgroundUpload() {
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.joestore.attendance.upload", using: .main) { task in
+            guard let processing = task as? BGProcessingTask else { task.setTaskCompleted(success: false); return }
+            self.backgroundTask = processing
+            processing.expirationHandler = { DispatchQueue.main.async { self.finishBackgroundUpload() } }
+            self.sync()
+        }
+        if !queue.isEmpty { scheduleUpload() }
+    }
+    private func scheduleUpload() {
+        let request = BGProcessingTaskRequest(identifier: "com.joestore.attendance.upload")
+        request.requiresNetworkConnectivity = true
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        try? BGTaskScheduler.shared.submit(request)
+    }
+    private func finishBackgroundUpload() {
+        backgroundTask?.setTaskCompleted(success: queue.isEmpty)
+        backgroundTask = nil
+        if !queue.isEmpty { scheduleUpload() }
     }
 }
 

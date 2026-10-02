@@ -13,6 +13,7 @@ export async function POST(req: NextRequest) {
     if (!session || session.role !== 'employee') return NextResponse.json({ error: 'حساب موظف نشط مطلوب' }, { status: 401 });
     let body;
     try { body = await req.json(); } catch { return NextResponse.json({ error: 'بيانات غير صالحة' }, { status: 400 }); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return NextResponse.json({error:'بيانات غير صالحة'},{status:400});
     const events = Array.isArray(body.events) ? body.events : [body];
     if (!events.length || events.length > 100) return NextResponse.json({ error: 'أرسل من 1 إلى 100 حدث' }, { status: 400 });
     const now = Date.now();

@@ -16,6 +16,7 @@ const eslintConfig = defineConfig([
     "mobile/android/**",
     "mobile/ios/**",
     "mobile/dist/**",
+    "artifacts/ios-simulator/**",
   ]),
 ]);
 

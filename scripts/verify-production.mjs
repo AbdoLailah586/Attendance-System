@@ -49,6 +49,25 @@ try {
     const personal=await call(`/api/attendance/report?date=${day}&userId=1`,{token});assert.equal(personal.status,200);assert.equal(personal.body.reports.length,1);const report=personal.body.reports[0];assert.equal(report.user.id,testId);assert.equal(report.logCount,10);assert.equal(report.summary.totalMinutes,7);assert.equal(report.summary.outsideMinutes,2);assert.equal(report.summary.overtimeMinutes,1);assert.equal(report.summary.unknownMinutes,0);assert.equal(report.exitCount,1);assert.equal(report.onDuty,false);assert.equal(report.punctuality.status,'on_time');pass('Cairo report: 7 minutes presence, 2 outside, 1 overtime; employee isolation');
     const audit=await call(`/api/attendance/logs?date=${day}&userId=${testId}`,{token:adminToken});assert.equal(audit.status,200);assert.equal(audit.body.logs.length,10);assert.ok(audit.body.logs.every(l=>Date.parse(l.received_at)>Date.parse(l.timestamp)));pass('Admin sees event time separately from receipt time');
     const demo=await call('/api/attendance/seed-demo',{method:'POST',token:adminToken});assert.equal(demo.status,410);pass('Destructive demo generator disabled');
+    assert.equal((await call('/api/settings',{method:'PUT',token:adminToken,data:{grace_period_mins:-1}})).status,400);
+    assert.equal((await call('/api/attendance/report?date=not-a-date',{token})).status,400);
+    assert.equal((await call('/api/attendance/ping',{method:'POST',token,data:null})).status,400);pass('Invalid dates, settings and null event payloads rejected');
+    const shiftChanged=await call('/api/users',{method:'PUT',token:adminToken,data:{id:testId,shift_start:'22:00',shift_end:'06:00'}});assert.equal(shiftChanged.status,200);
+    const nightDay=new Date(Date.parse(day+'T12:00:00Z')-2*86400000).toISOString().slice(0,10);
+    const nightStart=start-2*86400000+13*3600000+59*60000;
+    const night=Array.from({length:4},(_,minute)=>({client_event_id:randomUUID(),recorded_at:new Date(nightStart+minute*60000).toISOString(),event_type:minute===0?'clock_in':minute===3?'clock_out':'ping',lat:minute===3?null:b1.lat,lng:minute===3?null:b1.lng,accuracy:minute===3?null:3}));
+    assert.equal((await call('/api/attendance/ping',{method:'POST',token,data:{events:night}})).status,200);
+    const nightReport=(await call(`/api/attendance/report?date=${nightDay}`,{token})).body.reports[0];assert.equal(nightReport.summary.totalMinutes,3);assert.equal(nightReport.summary.unknownMinutes,0);assert.equal(nightReport.onDuty,false);assert.equal(nightReport.lastDeparture,night[3].recorded_at);pass('Overnight shift crosses midnight without losing minutes; GPS-free clock-out');
+    assert.equal((await call('/api/users',{method:'PUT',token:adminToken,data:{id:testId,shift_start:'10:00',shift_end:'10:08'}})).status,200);
+    const gapDay=new Date(Date.parse(day+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+    const gapStart=start-86400000;
+    const gap=[0,10,11].map((minute,i)=>({client_event_id:randomUUID(),recorded_at:new Date(gapStart+minute*60000).toISOString(),event_type:i===0?'clock_in':i===2?'clock_out':'ping',lat:b1.lat,lng:b1.lng,accuracy:3}));
+    assert.equal((await call('/api/attendance/ping',{method:'POST',token,data:{events:gap}})).status,200);
+    const gapReport=(await call(`/api/attendance/report?date=${gapDay}`,{token})).body.reports[0];const cap=Math.max(3,settings.ping_interval_secs/20);assert.equal(gapReport.summary.totalMinutes,cap+1);assert.equal(gapReport.summary.unknownMinutes,10-cap);pass('Missing GPS samples appear as gaps and are excluded from confirmed work');
+    const uncertain={...events[0],client_event_id:randomUUID(),recorded_at:new Date(gapStart+12*60000).toISOString(),accuracy:100000};
+    const accuracyResult=await call('/api/attendance/ping',{method:'POST',token,data:uncertain});assert.equal(accuracyResult.status,200);assert.equal(accuracyResult.body.location.branch_id,'unknown');
+    assert.equal((await call('/api/attendance/ping',{method:'POST',token,data:{client_event_id:randomUUID(),recorded_at:new Date(gapStart+13*60000).toISOString(),event_type:'clock_out',lat:null,lng:null,accuracy:null}})).status,200);pass('Uncertain GPS is flagged instead of proving branch presence');
+    const restored=(await call('/api/settings',{token:adminToken})).body.settings;assert.equal(restored.branch1_lat,settings.branch1_lat);assert.equal(restored.branch2_lat,settings.branch2_lat);assert.equal(restored.grace_period_mins,settings.grace_period_mins);pass('Production branch locations and attendance rules were preserved during QA');
   }
 } finally {
   if(testId&&adminToken) {
