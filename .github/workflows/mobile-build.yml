@@ -1,7 +1,15 @@
 name: Build mobile packages
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platform to build
+        type: choice
+        default: both
+        options: [both, android, ios]
 jobs:
   android:
+    if: inputs.platform != 'ios'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -10,6 +18,9 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;35.0.0
+          log-accepted-android-sdk-licenses: false
       - run: npm ci && npm run sync
         working-directory: mobile
       - run: chmod +x gradlew && ./gradlew assembleDebug --console=plain
@@ -17,6 +28,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: attendance-android-debug, path: mobile/android/app/build/outputs/apk/debug/app-debug.apk }
   ios:
+    if: inputs.platform != 'android'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

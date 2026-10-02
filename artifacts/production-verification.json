@@ -1,0 +1,20 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "runAt": "2026-10-02T16:31:32.742Z",
+  "testUserId": 7,
+  "checks": [
+    "Deployed release and database health",
+    "Anonymous report access denied",
+    "Admin login and branch settings",
+    "Password data excluded from API",
+    "Employee cannot read staff radar/logs or edit branches",
+    "Invalid GPS rejected",
+    "Future timestamps rejected",
+    "Offline batch accepts original timestamps and out-of-order delivery",
+    "Retry acknowledges duplicates without inserting them",
+    "Cairo report: 7 minutes presence, 2 outside, 1 overtime; employee isolation",
+    "Admin sees event time separately from receipt time",
+    "Destructive demo generator disabled",
+    "QA account deactivated; audit history retained"
+  ]
+}
