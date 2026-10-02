@@ -129,6 +129,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
             if let call = startCall {
                 try record(type: "clock_in", location: fix)
                 prefs.set(true, forKey: "attendance-active")
+                prefs.set(Date().timeIntervalSince1970, forKey: "attendance-shift-started")
                 timeout?.cancel(); startCall = nil; lastRecorded = Date(); resume(); call.resolve()
             } else if active && Date().timeIntervalSince(lastRecorded) >= 50 {
                 try record(type: "ping", location: fix); lastRecorded = Date()
@@ -147,6 +148,13 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         guard !active && queue.isEmpty else { throw problem("أنهِ الشيفت وزامن الأحداث قبل تسجيل الخروج") }
         SecItemDelete(keyQuery as CFDictionary)
         prefs.removeObject(forKey: "attendance-user")
+    }
+    func resetEpoch(_ value: String) throws {
+        let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
+        guard let date=formatter.date(from:value) else { throw problem("تاريخ بداية السجل غير صالح") }
+        if active && prefs.double(forKey:"attendance-shift-started") < date.timeIntervalSince1970 {
+            prefs.set(false,forKey:"attendance-active");manager.stopUpdatingLocation();manager.stopMonitoringSignificantLocationChanges()
+        }
     }
     func status() -> [String: Any] {
         ["user": user.map { $0 as Any } ?? NSNull(), "active": active, "pending": queue.count,
@@ -210,12 +218,13 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
 public class AttendanceTrackingPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "AttendanceTrackingPlugin"
     public let jsName = "AttendanceTracking"
-    public let pluginMethods: [CAPPluginMethod] = ["configure", "session", "status", "start", "stop", "sync", "logout", "openAdmin"].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
+    public let pluginMethods: [CAPPluginMethod] = ["configure", "session", "status", "start", "stop", "sync", "logout", "openAdmin", "resetEpoch"].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
     private var engine: AttendanceEngine { AttendanceEngine.shared }
     public override func load() { DispatchQueue.main.async { _ = self.engine } }
     @objc func configure(_ call: CAPPluginCall) { DispatchQueue.main.async { do { try self.engine.configure(token: call.getString("token") ?? "", userString: call.getString("user") ?? "{}"); call.resolve() } catch { call.reject(error.localizedDescription) } } }
     @objc func session(_ call: CAPPluginCall) { DispatchQueue.main.async { call.resolve(["token": self.engine.token()]) } }
     @objc func status(_ call: CAPPluginCall) { DispatchQueue.main.async { call.resolve(self.engine.status()) } }
+    @objc func resetEpoch(_ call: CAPPluginCall) { DispatchQueue.main.async { do { try self.engine.resetEpoch(call.getString("resetAt") ?? "");call.resolve() } catch { call.reject(error.localizedDescription) } } }
     @objc func start(_ call: CAPPluginCall) { DispatchQueue.main.async { self.engine.start(call) } }
     @objc func stop(_ call: CAPPluginCall) { DispatchQueue.main.async { do { try self.engine.stop(); call.resolve() } catch { call.reject(error.localizedDescription) } } }
     @objc func sync(_ call: CAPPluginCall) { DispatchQueue.main.async { self.engine.sync(); call.resolve() } }

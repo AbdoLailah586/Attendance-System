@@ -38,10 +38,15 @@ export async function POST(req: NextRequest) {
     const client = await getPool().connect();
     try {
       await client.query('BEGIN');
+      const reset = (await client.query("SELECT attendance_reset_at FROM settings WHERE id='main' FOR SHARE")).rows[0]?.attendance_reset_at;
       const acknowledgements = [];
       let latest;
       let location;
       for (const event of normalized) {
+        if (reset && event.time < new Date(reset).getTime()) {
+          acknowledgements.push({client_event_id:event.client_event_id,duplicate:false,discarded:true,reason:'attendance_reset'});
+          continue;
+        }
         const geo = event.lat == null ? null : verifiedBranchLocation(event.lat, event.lng, event.accuracy, settings);
         const branch = geo?.branch_id || 'unknown';
         const result = await client.query(`INSERT INTO attendance_logs
@@ -54,7 +59,7 @@ export async function POST(req: NextRequest) {
         location = { ...geo, branch_id: branch, branch_name: branch === 'unknown' ? 'موقع غير مؤكد' : geo?.branch_name };
       }
       await client.query('COMMIT');
-      return NextResponse.json({ success: true, acknowledged: acknowledgements, log: latest, location, settings: { branch1_name: settings.branch1_name, branch2_name: settings.branch2_name, ping_interval_secs: settings.ping_interval_secs } });
+      return NextResponse.json({ success: true, acknowledged: acknowledgements, log: latest, location, attendance_reset_at:reset, settings: { branch1_name: settings.branch1_name, branch2_name: settings.branch2_name, ping_interval_secs: settings.ping_interval_secs } });
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   } catch (error) {
     console.error('Attendance sync failed:', error);

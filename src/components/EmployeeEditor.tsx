@@ -1,0 +1,25 @@
+'use client';
+import { useState } from 'react';
+import type { AppUser } from '@/lib/types';
+import { localDate } from '@/lib/time';
+import type { EmployeePolicy } from '@/lib/period-report';
+const weekdays=['الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+export default function EmployeeEditor({user,policies,onSaved,onClose}:{user:AppUser;policies:EmployeePolicy[];onSaved:()=>void;onClose:()=>void}){
+  const [form,setForm]=useState({...user,phone:user.phone||'',password:'',work_days:user.work_days||[0,1,2,3,4,5,6],cycle_start_day:user.cycle_start_day||1,grace_period_mins:user.grace_period_mins??30,attendance_start_date:user.attendance_start_date||localDate(),effective_from:localDate()}),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const set=(key:string,value:unknown)=>setForm(f=>({...f,[key]:value}));
+  const save=async(e:React.FormEvent)=>{
+    e.preventDefault();setBusy(true);setError('');
+    try{
+      const {password, ...data}=form;
+      const response=await fetch('/api/users',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,...(password?{password}:{})})});
+      const result=await response.json();if(!response.ok)throw new Error(result.error||'تعذر الحفظ');onSaved();onClose();
+    }catch(e){setError((e as Error).message);}finally{setBusy(false);}
+  };
+  return <div className="modal-overlay"><section className="modal employee-editor" role="dialog" aria-modal="true" aria-labelledby="employee-editor-title"><h3 id="employee-editor-title">تعديل بروفايل {user.name}</h3><form onSubmit={save}>
+    <div className="report-filters"><label>الاسم<input className="form-input" value={form.name} required onChange={e=>set('name',e.target.value)}/></label><label>اسم الدخول<input className="form-input" value={form.username} required onChange={e=>set('username',e.target.value)}/></label><label>رقم الهاتف<input className="form-input" value={form.phone} onChange={e=>set('phone',e.target.value)}/></label><label>الصلاحية<select className="form-input" value={form.role} onChange={e=>set('role',e.target.value)}><option value="employee">موظف</option><option value="admin">مدير</option></select></label><label>حالة الحساب<select className="form-input" value={String(form.is_active!==false)} onChange={e=>set('is_active',e.target.value==='true')}><option value="true">نشط</option><option value="false">معطّل</option></select></label><label>كلمة مرور جديدة (اختياري)<input className="form-input" type="password" minLength={6} autoComplete="new-password" value={form.password} onChange={e=>set('password',e.target.value)}/></label><label>بداية الشيفت<input className="form-input" type="time" required value={form.shift_start||'10:00'} onChange={e=>set('shift_start',e.target.value)}/></label><label>نهاية الشيفت<input className="form-input" type="time" required value={form.shift_end||'22:00'} onChange={e=>set('shift_end',e.target.value)}/></label><label>فترة السماح بالدقائق<input className="form-input" type="number" min={0} max={180} required value={form.grace_period_mins} onChange={e=>set('grace_period_mins',Number(e.target.value))}/></label><label>يوم بداية دورة الشهر<input className="form-input" type="number" min={1} max={31} required value={form.cycle_start_day} onChange={e=>set('cycle_start_day',Number(e.target.value))}/></label><label>بداية متابعة الحضور<input className="form-input" type="date" required value={form.attendance_start_date} onChange={e=>set('attendance_start_date',e.target.value)}/></label><label>تاريخ سريان قواعد العمل<input className="form-input" type="date" max={localDate()} required value={form.effective_from} onChange={e=>set('effective_from',e.target.value)}/></label></div>
+    <fieldset className="workday-picker"><legend>أيام العمل الأسبوعية (الباقي راحة)</legend>{weekdays.map((day,i)=><label key={day}><input type="checkbox" checked={form.work_days.includes(i)} onChange={e=>set('work_days',e.target.checked?[...form.work_days,i].sort():form.work_days.filter(n=>n!==i))}/>{day}</label>)}</fieldset>
+    <p className="muted">قواعد الشيفت والأيام والدورة تسري من التاريخ المختار. اختيار يوم سابق يعدّل حساب تلك الفترة. الاسم واسم الدخول والصلاحية وحالة الدخول تُحدّث فور الحفظ.</p>
+    <details><summary>تاريخ قواعد هذا الحساب</summary>{policies.filter(p=>p.user_id===user.id).map(p=><p className="muted" key={p.effective_from}>{p.effective_from==='1900-01-01'?'القواعد الأصلية':p.effective_from}: {p.shift_start} — {p.shift_end} · بداية الدورة {p.cycle_start_day} · {p.work_days.map(d=>weekdays[d]).join('، ')||'لا توجد أيام عمل'}</p>)}</details>
+    {error&&<p role="alert" className="tracker-warning">{error}</p>}<div className="report-actions"><button type="submit" className="btn btn-primary" disabled={busy}>{busy?'جاري الحفظ…':'حفظ البروفايل'}</button><button type="button" className="btn btn-secondary" disabled={busy} onClick={onClose}>إلغاء</button></div>
+  </form></section></div>;
+}

@@ -2,6 +2,7 @@
 
 export interface Branch { id: string; name: string; lat: number; lng: number; radius: number; is_active?: boolean }
 export interface StoreSettings {
+  attendance_reset_at?: string | null;
   branches?: Branch[];
   id: string;
   branch1_name: string;

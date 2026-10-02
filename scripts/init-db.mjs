@@ -1,3 +1,4 @@
+import {randomBytes,scryptSync} from 'node:crypto';
 import pg from 'pg';
 
 const { Pool } = pg;
@@ -66,17 +67,10 @@ async function main() {
 
     const usersCount = await client.query('SELECT COUNT(*) FROM users');
     if (parseInt(usersCount.rows[0].count, 10) === 0) {
-      await client.query(`
-        INSERT INTO users (username, password, name, phone, role, shift_start, shift_end)
-        VALUES 
-          ('admin', 'admin123', 'مدير النظام (أدمن)', '01000000000', 'admin', '10:00', '22:00'),
-          ('emp1', '123456', 'أحمد محمود', '01011112222', 'employee', '10:00', '22:00'),
-          ('emp2', '123456', 'محمد علي', '01022223333', 'employee', '10:00', '22:00'),
-          ('emp3', '123456', 'كريم حسن', '01033334444', 'employee', '10:00', '22:00'),
-          ('emp4', '123456', 'يوسف إبراهيم', '01044445555', 'employee', '10:00', '22:00'),
-          ('emp5', '123456', 'عمر فاروق', '01055556666', 'employee', '10:00', '22:00');
-      `);
-      console.log('Seeded initial admin and 5 employees!');
+      if(!process.env.INITIAL_ADMIN_USERNAME||!process.env.INITIAL_ADMIN_PASSWORD)throw new Error('Set INITIAL_ADMIN_USERNAME and INITIAL_ADMIN_PASSWORD for a new database');
+      const salt=randomBytes(16).toString('hex');const digest=scryptSync(process.env.INITIAL_ADMIN_PASSWORD,salt,64).toString('hex');
+      await client.query("INSERT INTO users(username,password,name,role) VALUES($1,$2,$3,'admin')",[process.env.INITIAL_ADMIN_USERNAME,'scrypt:'+salt+':'+digest,process.env.INITIAL_ADMIN_NAME||'مدير النظام']);
+      console.log('Created owner administrator; no demo employees or attendance were generated');
     }
 
     await client.query(`

@@ -66,7 +66,7 @@ export function verifyToken(token: string): UserSession | null {
 export async function getActiveSession(req: NextRequest): Promise<UserSession | null> {
   const session = getSessionFromRequest(req);
   if (!session) return null;
-  const result = await query('SELECT id, username, name, role FROM users WHERE id=$1 AND is_active=TRUE', [session.id]);
+  const result = await query<UserSession>('SELECT id, username, name, role FROM users WHERE id=$1 AND is_active=TRUE', [session.id]);
   return result.rows[0] || null;
 }
 

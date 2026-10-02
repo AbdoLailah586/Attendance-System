@@ -27,10 +27,16 @@ export default function EmployeeTracker({ user }: Props) {
     const response = await fetch('/api/attendance/report', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error('تعذر تحديث التقرير');
     const data = await response.json();
+    const reset=data.settings?.attendance_reset_at;
+    if(reset&&localStorage.getItem(`attendance-reset-${user.id}`)!==reset){
+      duty.current=false;setOnDuty(false);localStorage.setItem(storageKey,'false');
+      localStorage.setItem(`attendance-reset-${user.id}`,reset);
+      setPosition(null);setLastSaved(null);setMessage('الإدارة بدأت سجل حضور جديد؛ ابدأ الشيفت لتسجيل حضورك الفعلي');
+    }
     setSettings(data.settings); setReport(data.reports?.[0] || null);
     localStorage.setItem(`attendance-summary-${user.id}`, JSON.stringify(data));
     return data;
-  }, [user.id]);
+  }, [user.id,storageKey]);
   const sync = useCallback(async () => {
     try {
       setQueued((await pendingEvents(user.id)).length);

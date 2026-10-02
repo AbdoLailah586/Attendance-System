@@ -53,7 +53,18 @@ async function refresh() {
   state = await Tracking.status();
   if(state.user) await Tracking.sync();
   if (state.user?.role === 'employee') {
-    try {const {token}=await Tracking.session();const data=await request('/api/attendance/report',null,token);summary=data.reports?.[0];localStorage.setItem(`summary-${state.user.id}`,JSON.stringify(summary));}
+    try {
+      const {token}=await Tracking.session();
+      const identity=await request('/api/auth/me',null,token);
+      if(['username','name','phone','role','shift_start','shift_end','is_active'].some(key=>state.user[key]!==identity.user[key])){
+        await Tracking.configure({token,user:JSON.stringify(identity.user)});state=await Tracking.status();
+      }
+      if(state.user.role==='employee'){
+        const data=await request('/api/attendance/report',null,token);
+        if(data.settings.attendance_reset_at){await Tracking.resetEpoch({resetAt:data.settings.attendance_reset_at});state=await Tracking.status();}
+        summary=data.reports?.[0];localStorage.setItem(`summary-${state.user.id}`,JSON.stringify(summary));
+      }else{summary=null;}
+    }
     catch {const cached=localStorage.getItem(`summary-${state.user.id}`);if(cached)summary=JSON.parse(cached);}
   }
   draw();

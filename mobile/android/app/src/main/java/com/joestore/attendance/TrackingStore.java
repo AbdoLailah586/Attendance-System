@@ -77,7 +77,9 @@ final class TrackingStore extends SQLiteOpenHelper {
     }
     synchronized boolean active() { return prefs.getBoolean("active", false); }
     synchronized void setActive(boolean active) throws Exception {
-        if (!prefs.edit().putBoolean("active", active).commit()) throw new Exception("تعذر حفظ حالة الشيفت");
+        android.content.SharedPreferences.Editor edit=prefs.edit().putBoolean("active", active);
+        if(active)edit.putLong("shift_started_at",System.currentTimeMillis());
+        if (!edit.commit()) throw new Exception("تعذر حفظ حالة الشيفت");
     }
     synchronized int pending() {
         try (Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM events WHERE user_id=?", new String[]{String.valueOf(userId())})) { c.moveToFirst(); return c.getInt(0); }

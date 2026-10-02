@@ -13,17 +13,17 @@ import {
   Plus,
   Trash2,
   Copy,
-  Download,
-  Calendar,
-  Sparkles,
+  Pencil,
   LocateFixed,
   Check,
 } from 'lucide-react';
 import AttendanceMap from './AttendanceMap';
-import { localDate } from '@/lib/time';
 import AttendanceLogViewer from './AttendanceLogViewer';
 import BranchManager from './BranchManager';
-import type { AppUser, DailyReport, LiveEmployee } from '@/lib/types';
+import AttendanceReports from './AttendanceReports';
+import EmployeeEditor from './EmployeeEditor';
+import type { EmployeePolicy } from '@/lib/period-report';
+import type { AppUser, LiveEmployee } from '@/lib/types';
 import type { StoreSettings } from '@/lib/geo';
 
 interface AdminDashboardProps {
@@ -39,11 +39,9 @@ export default function AdminDashboard({}: AdminDashboardProps) {
   const [loadingLive, setLoadingLive] = useState(false);
   const [autoRefresh] = useState(true);
 
-  // Reports data
-  const [reportDate, setReportDate] = useState(() => localDate());
-  const [reports, setReports] = useState<DailyReport[]>([]);
-  const [loadingReports, setLoadingReports] = useState(false);
-  const [selectedUserFilter, setSelectedUserFilter] = useState<string>('all');
+  const [reportRefresh,setReportRefresh]=useState(0);
+  const [editingUser,setEditingUser]=useState<AppUser|null>(null);
+  const [policies,setPolicies]=useState<EmployeePolicy[]>([]);
 
   // Users data
   const [usersList, setUsersList] = useState<AppUser[]>([]);
@@ -79,9 +77,6 @@ export default function AdminDashboard({}: AdminDashboardProps) {
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState<string | null>(null);
 
 
-  // Seed demo state
-  const [seedingDemo, setSeedingDemo] = useState(false);
-
   // Fetch live radar data
   const fetchLiveData = async () => {
     try {
@@ -102,22 +97,6 @@ export default function AdminDashboard({}: AdminDashboardProps) {
     }
   };
 
-  // Fetch reports data
-  const fetchReports = async (date: string) => {
-    try {
-
-      const res = await fetch(`/api/attendance/report?date=${date}`);
-      if (res.ok) {
-        const data = await res.json();
-        setReports(data.reports || []);
-      }
-    } catch (err) {
-      console.error('Fetch reports error:', err);
-    } finally {
-      setLoadingReports(false);
-    }
-  };
-
   // Fetch users list
   const fetchUsers = async () => {
     try {
@@ -126,6 +105,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
       if (res.ok) {
         const data = await res.json();
         setUsersList(data.users || []);
+        setPolicies(data.policies || []);
       }
     } catch (err) {
       console.error('Fetch users error:', err);
@@ -136,7 +116,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
 
   // Initial load
   useEffect(() => {
-    queueMicrotask(() => { void fetchLiveData(); void fetchReports(localDate()); void fetchUsers(); });
+    queueMicrotask(() => { void fetchLiveData(); void fetchUsers(); });
   }, []);
 
   // Auto refresh interval for live tab
@@ -147,27 +127,6 @@ export default function AdminDashboard({}: AdminDashboardProps) {
     }, 15000); // 15 seconds
     return () => clearInterval(interval);
   }, [autoRefresh, activeTab]);
-
-  // Seed demo data
-  const handleSeedDemo = async () => {
-    if (!confirm('هل تريد توليد بيانات حضور تجريبية واقعية لليوم (حضور مبكر، في الميعاد، ومتأخر)؟')) return;
-    try {
-      setSeedingDemo(true);
-      const res = await fetch('/api/attendance/seed-demo', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.message);
-        fetchLiveData();
-        fetchReports(reportDate);
-      } else {
-        alert(data.error);
-      }
-    } catch {
-      alert('حدث خطأ أثناء توليد البيانات');
-    } finally {
-      setSeedingDemo(false);
-    }
-  };
 
   // Add User
   const handleAddUser = async (e: React.FormEvent) => {
@@ -275,21 +234,6 @@ export default function AdminDashboard({}: AdminDashboardProps) {
     setTimeout(() => setCopiedId(null), 2500);
   };
 
-  // Escape spreadsheet formulas, quotes, and newlines in exported user data.
-  const exportToCSV = () => {
-    const quote = (value: unknown) => '"' + String(value ?? '').replace(/^[=+@-]/, "'$&").replaceAll('"', '""') + '"';
-    const rows = reports.map(r=>[r.user.name,r.user.username,r.summary.totalMinutes,r.summary.regularMinutes,r.summary.overtimeMinutes,r.summary.outsideMinutes,r.summary.unknownMinutes,r.exitCount,r.firstArrival,r.lastDeparture,r.punctuality.label]);
-    const csv = '\uFEFF' + [['الموظف','المستخدم','حضور بالدقائق','خلال الشيفت','إضافي','خارج الفروع','فجوات تتبع','مرات الخروج','أول وصول','آخر انصراف','الانضباط'],...rows].map(row=>row.map(quote).join(',')).join('\r\n');
-    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
-    const link=document.createElement('a');link.href=url;link.download='attendance-'+reportDate+'.csv';link.click();URL.revokeObjectURL(url);
-  };
-
-  // Filtered reports
-  const filteredReports = reports.filter((r) => {
-    if (selectedUserFilter === 'all') return true;
-    return r.user.id.toString() === selectedUserFilter;
-  });
-
   return (
     <div className="app-container">
       {/* Top Header & Actions */}
@@ -313,26 +257,17 @@ export default function AdminDashboard({}: AdminDashboardProps) {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          {process.env.NEXT_PUBLIC_ENABLE_DEMO === 'true' && <button
-            onClick={handleSeedDemo}
-            disabled={seedingDemo}
-            className="btn btn-secondary btn-sm"
-            style={{ borderColor: '#c7d2fe', background: '#eff6ff', color: '#3b82f6' }}
-            title="توليد بيانات حضور واقعية لليوم (حضور مبكر، في الميعاد، متأخر)"
-          >
-            <Sparkles size={16} />
-            <span>{seedingDemo ? 'جاري التوليد...' : 'توليد بيانات تجريبية لليوم'}</span>
-          </button>}
+
 
           <button
             onClick={() => {
               if (activeTab === 'live') fetchLiveData();
-              if (activeTab === 'reports') fetchReports(reportDate);
+              if (activeTab === 'reports') setReportRefresh(n=>n+1);
               if (activeTab === 'users') fetchUsers();
             }}
             className="btn btn-secondary btn-sm"
           >
-            <RefreshCw size={16} className={loadingLive || loadingReports ? 'spin' : ''} />
+            <RefreshCw size={16} className={loadingLive ? 'spin' : ''} />
             <span>تحديث</span>
           </button>
         </div>
@@ -631,360 +566,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
         </div>
       )}
 
-      {/* TAB 2: REPORTS & ANALYTICS */}
-      {activeTab === 'reports' && (
-        <div>
-          {/* Controls Bar: Date filter, Employee filter, Export */}
-          <div
-            className="card"
-            style={{
-              padding: '16px 20px',
-              marginBottom: '20px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '14px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Calendar size={18} color="#2563eb" />
-                <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0f172a' }}>
-                  تاريخ التقرير:
-                </label>
-                <input
-                  type="date"
-                  className="form-input"
-                  value={reportDate}
-                  onChange={(e) => {
-                    setReportDate(e.target.value);
-                    fetchReports(e.target.value);
-                  }}
-                  style={{ padding: '6px 12px', width: 'auto' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0f172a' }}>
-                  الموظف:
-                </label>
-                <select
-                  className="form-input"
-                  value={selectedUserFilter}
-                  onChange={(e) => setSelectedUserFilter(e.target.value)}
-                  style={{ padding: '6px 12px', width: 'auto' }}
-                >
-                  <option value="all">جميع الموظفين</option>
-                  {usersList
-                    .filter((u) => u.role === 'employee')
-                    .map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={exportToCSV} className="btn btn-secondary btn-sm">
-                <Download size={16} />
-                <span>تصدير إكسل (CSV)</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Detailed Reports Cards */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {filteredReports.map((report) => (
-              <div
-                key={report.user.id}
-                className="card"
-                style={{
-                  padding: '24px',
-                  borderRadius: '20px',
-                }}
-              >
-                {/* Employee Header */}
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '12px',
-                    marginBottom: '18px',
-                    paddingBottom: '16px',
-                    borderBottom: '1px solid #f1f5f9',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div
-                      style={{
-                        width: '46px',
-                        height: '46px',
-                        borderRadius: '14px',
-                        background: '#eff6ff',
-                        color: '#2563eb',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 800,
-                        fontSize: '1.2rem',
-                      }}
-                    >
-                      {report.user.name.charAt(0)}
-                    </div>
-                    <div>
-                      <h4 style={{ fontSize: '1.2rem', fontWeight: 800, color: '#0f172a' }}>
-                        {report.user.name}
-                      </h4>
-                      <span style={{ fontSize: '0.825rem', color: '#64748b' }}>
-                        الشيفت المعتمد: {report.user.shift_start || '10:00'} ص إلى{' '}
-                        {report.user.shift_end || '10:00'} م
-                      </span>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className={`badge ${report.punctuality.badgeClass}`} style={{ fontSize: '0.9rem', padding: '6px 14px' }}>
-                      {report.punctuality.label} ({report.punctuality.message})
-                    </span>
-                  </div>
-                </div>
-
-                {/* 4 Key Metrics as Requested in Audio: بالساعة والدقيقة */}
-                <div className="grid-4" style={{ marginBottom: '20px' }}>
-                  <div
-                    style={{
-                      background: '#f8fafc',
-                      padding: '14px',
-                      borderRadius: '14px',
-                      border: '1px solid #e2e8f0',
-                    }}
-                  >
-                    <span style={{ fontSize: '0.8rem', color: '#64748b', display: 'block', marginBottom: '4px' }}>
-                      إجمالي وقت التواجد (بالساعة والدقيقة)
-                    </span>
-                    <strong style={{ fontSize: '1.15rem', color: '#0f172a' }}>
-                      {report.summary.totalFormatted}
-                    </strong>
-                    <span style={{ fontSize: '0.725rem', color: '#94a3b8', display: 'block', marginTop: '2px' }}>
-                      {report.summary.totalMinutes} دقيقة عمل
-                    </span>
-                  </div>
-
-                  <div
-                    style={{
-                      background: 'var(--branch1-bg)',
-                      padding: '14px',
-                      borderRadius: '14px',
-                      border: '1px solid var(--branch1-border)',
-                    }}
-                  >
-                    <span style={{ fontSize: '0.8rem', color: '#059669', display: 'block', marginBottom: '4px' }}>
-                      الوقت في {settings?.branch1_name || 'المحل الأول'}
-                    </span>
-                    <strong style={{ fontSize: '1.15rem', color: '#059669' }}>
-                      {report.summary.branch1Formatted}
-                    </strong>
-                    <span style={{ fontSize: '0.725rem', color: '#059669', opacity: 0.8, display: 'block', marginTop: '2px' }}>
-                      {report.summary.branch1Minutes} دقيقة
-                    </span>
-                  </div>
-
-                  <div
-                    style={{
-                      background: 'var(--branch2-bg)',
-                      padding: '14px',
-                      borderRadius: '14px',
-                      border: '1px solid var(--branch2-border)',
-                    }}
-                  >
-                    <span style={{ fontSize: '0.8rem', color: '#4f46e5', display: 'block', marginBottom: '4px' }}>
-                      الوقت في {settings?.branch2_name || 'المحل الثاني'}
-                    </span>
-                    <strong style={{ fontSize: '1.15rem', color: '#4f46e5' }}>
-                      {report.summary.branch2Formatted}
-                    </strong>
-                    <span style={{ fontSize: '0.725rem', color: '#4f46e5', opacity: 0.8, display: 'block', marginTop: '2px' }}>
-                      {report.summary.branch2Minutes} دقيقة
-                    </span>
-                  </div>
-
-                  <div
-                    style={{
-                      background: 'var(--outside-bg)',
-                      padding: '14px',
-                      borderRadius: '14px',
-                      border: '1px solid var(--outside-border)',
-                    }}
-                  >
-                    <span style={{ fontSize: '0.8rem', color: '#d97706', display: 'block', marginBottom: '4px' }}>
-                      الوقت خارج المحلين أثناء اليوم
-                    </span>
-                    <strong style={{ fontSize: '1.15rem', color: '#d97706' }}>
-                      {report.summary.outsideFormatted}
-                    </strong>
-                    <span style={{ fontSize: '0.725rem', color: '#d97706', opacity: 0.8, display: 'block', marginTop: '2px' }}>
-                      {report.summary.outsideMinutes} دقيقة
-                    </span>
-                  </div>
-                </div>
-
-                {/* Arrival & Departure Times (وصل إمتى ومشى إمتى) */}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                    gap: '12px',
-                    padding: '12px 16px',
-                    background: '#f8fafc',
-                    borderRadius: '12px',
-                    border: '1px solid #e2e8f0',
-                    marginBottom: '16px',
-                    fontSize: '0.875rem',
-                  }}
-                >
-                  <div>
-                    <div className="metrics-grid">
-                      <div>عمل خلال الشيفت: <strong>{report.summary.regularFormatted}</strong></div>
-                      <div>إضافي بعد الشيفت: <strong>{report.summary.overtimeFormatted}</strong></div>
-                      <div>فجوات التتبع: <strong>{report.summary.unknownFormatted}</strong></div>
-                      <div>خروج من الفروع: <strong>{report.exitCount} مرات</strong></div>
-                      <div>انصراف مبكر: <strong>{report.summary.earlyDepartureFormatted}</strong></div>
-                      {report.summary.branches?.filter((b: {id:string})=>!['branch1','branch2'].includes(b.id)).map((b: {id:string;name:string;formatted:string})=><div key={b.id}>{b.name}: <strong>{b.formatted}</strong></div>)}
-                    </div>
-                    <span style={{ color: '#64748b' }}>وقت أول وصول للمحل (وصل إمتى): </span>
-                    <strong style={{ color: '#0f172a' }}>
-                      {report.firstArrival
-                        ? new Date(report.firstArrival).toLocaleTimeString('ar-EG', { timeZone:'Africa/Cairo',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                          })
-                        : 'لم يحضر'}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span style={{ color: '#64748b' }}>وقت آخر انصراف (مشى إمتى): </span>
-                    <strong style={{ color: '#0f172a' }}>
-                      {report.lastDeparture
-                        ? new Date(report.lastDeparture).toLocaleTimeString('ar-EG', { timeZone:'Africa/Cairo',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                          })
-                        : 'لم يحضر'}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span style={{ color: '#64748b' }}>عدد النبضات المسجلة: </span>
-                    <strong>{report.logCount} نبضة</strong>
-                  </div>
-                </div>
-
-                {/* Timeline Visualization: تفاصيل الفترات متى كان موجود ومتى مشى */}
-                {report.timeline && report.timeline.length > 0 ? (
-                  <div>
-                    <span
-                      style={{
-                        fontSize: '0.85rem',
-                        fontWeight: 700,
-                        color: '#0f172a',
-                        display: 'block',
-                        marginBottom: '8px',
-                      }}
-                    >
-                      الجدول الزمني لحركة الموظف بين المحلين والتنقل:
-                    </span>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {report.timeline.map((item, idx: number) => (
-                        <div
-                          key={idx}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '10px 14px',
-                            background:
-                              item.branch_id === 'branch1'
-                                ? 'var(--branch1-bg)'
-                                : item.branch_id === 'branch2'
-                                ? 'var(--branch2-bg)'
-                                : 'var(--outside-bg)',
-                            borderRadius: '10px',
-                            border: `1px solid ${
-                              item.branch_id === 'branch1'
-                                ? 'var(--branch1-border)'
-                                : item.branch_id === 'branch2'
-                                ? 'var(--branch2-border)'
-                                : 'var(--outside-border)'
-                            }`,
-                            fontSize: '0.85rem',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span
-                              style={{
-                                width: '10px',
-                                height: '10px',
-                                borderRadius: '50%',
-                                background:
-                                  item.branch_id === 'branch1'
-                                    ? '#059669'
-                                    : item.branch_id === 'branch2'
-                                    ? '#4f46e5'
-                                    : '#d97706',
-                              }}
-                            />
-                            <strong>{item.branch_name}</strong>
-                          </div>
-
-                          <div style={{ color: '#475569' }}>
-                            من الساعة{' '}
-                            <strong>
-                              {new Date(item.start).toLocaleTimeString('ar-EG', { timeZone:'Africa/Cairo',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </strong>{' '}
-                            إلى الساعة{' '}
-                            <strong>
-                              {new Date(item.end).toLocaleTimeString('ar-EG', { timeZone:'Africa/Cairo',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </strong>{' '}
-                            (المدة: {item.durationFormatted})
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      textAlign: 'center',
-                      padding: '16px',
-                      background: '#f8fafc',
-                      borderRadius: '10px',
-                      color: '#94a3b8',
-                      fontSize: '0.85rem',
-                    }}
-                  >
-                    لا توجد تسجيلات حضور لهذا الموظف في هذا اليوم
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {activeTab === 'reports' && <AttendanceReports users={usersList} refreshKey={reportRefresh} />}
 
       {/* TAB 3: SETTINGS & GEOFENCING */}
       {activeTab === 'settings' && (
@@ -1188,7 +770,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
             <div className="card" style={{ padding: '24px', marginBottom: '24px' }}>
               <h3 className="card-title" style={{ marginBottom: '16px' }}>
                 <Clock size={20} color="#2563eb" />
-                <span>مواعيد العمل وقواعد الشيفت والانضباط</span>
+                <span>القواعد الافتراضية للحسابات الجديدة ومعدل التحديث</span>
               </h3>
 
               <div className="grid-3">
@@ -1285,7 +867,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
             </div>
 
             <button
-              onClick={() => setShowAddUserModal(true)}
+              onClick={() => {setNewUserData({...newUserData,shift_start:settings?.shift_start_time||'10:00',shift_end:settings?.shift_end_time||'22:00'});setShowAddUserModal(true);}}
               className="btn btn-primary btn-sm"
               style={{ padding: '10px 16px' }}
             >
@@ -1365,6 +947,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button className="btn btn-secondary btn-sm" title={`تعديل بروفايل ${u.name}`} onClick={()=>setEditingUser(u)}><Pencil size={14}/>تعديل</button>
                         {u.role !== 'admin' && (
                           <>
                             <button
@@ -1397,6 +980,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
         </div>
       )}
 
+      {editingUser && <EmployeeEditor key={editingUser.id} user={editingUser} policies={policies} onClose={()=>setEditingUser(null)} onSaved={()=>{void fetchUsers();void fetchLiveData();setReportRefresh(n=>n+1);}} />}
       {/* Add User Modal */}
       {showAddUserModal && (
         <div className="modal-overlay">

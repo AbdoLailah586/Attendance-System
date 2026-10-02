@@ -68,6 +68,13 @@ public class AttendanceTrackingPlugin extends Plugin {
         try{synchronized(store){if(store.active()){store.record("clock_out",null);store.setActive(false);}}getContext().stopService(new Intent(getContext(),TrackingService.class));store.sync();call.resolve();}catch(Exception e){call.reject("تعذر حفظ الانصراف؛ لم يتوقف الشيفت");}
     }
     @PluginMethod public void sync(PluginCall call){store.sync();call.resolve();}
+    @PluginMethod public void resetEpoch(PluginCall call){
+        try{
+            long reset=java.time.Instant.parse(call.getString("resetAt","")).toEpochMilli();
+            synchronized(store){if(store.active()&&store.prefs.getLong("shift_started_at",0)<reset){store.setActive(false);getContext().stopService(new Intent(getContext(),TrackingService.class));}}
+            call.resolve();
+        }catch(Exception e){call.reject("تعذر تحديث بداية السجل");}
+    }
     @PluginMethod public void logout(PluginCall call){try{store.logout();call.resolve();}catch(Exception e){call.reject(e.getMessage());}}
     @PluginMethod public void openAdmin(PluginCall call){getContext().startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse(TrackingStore.API)));call.resolve();}
 }
