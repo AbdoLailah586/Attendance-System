@@ -1,0 +1,16 @@
+{
+  "name": "نظام الحضور والانصراف الذكي",
+  "short_name": "الحضور الذكي",
+  "description": "تتبع حضور وانصراف الموظفين جغرافياً بدقة في المحلات والفروع",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}
