@@ -5,40 +5,55 @@ import Navbar from '@/components/Navbar';
 import LoginScreen from '@/components/LoginScreen';
 import AdminDashboard from '@/components/AdminDashboard';
 import EmployeeTracker from '@/components/EmployeeTracker';
+import { pendingEvents } from '@/lib/offline';
+import type { AppUser } from '@/lib/types';
 
 export default function Home() {
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionMessage, setSessionMessage] = useState('');
 
   // Check existing session
   const checkSession = async () => {
     try {
-      setLoading(true);
       const res = await fetch('/api/auth/me');
       if (res.ok) {
         const data = await res.json();
         if (data.authenticated && data.user) {
           setCurrentUser(data.user);
+          if (data.user.role === 'employee') localStorage.setItem('attendance-offline-user', JSON.stringify(data.user));
         } else {
           setCurrentUser(null);
         }
       } else {
+        if (res.status >= 500) throw new Error('Server unavailable');
+        localStorage.removeItem('attendance-offline-user');
         setCurrentUser(null);
       }
     } catch {
-      setCurrentUser(null);
+      const cached = localStorage.getItem('attendance-offline-user');
+      setCurrentUser(cached ? JSON.parse(cached) : null);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    checkSession();
+    queueMicrotask(() => void checkSession());
   }, []);
 
   const handleLogout = async () => {
     try {
+      if (currentUser?.role === 'employee') {
+        if (localStorage.getItem(`attendance-duty-${currentUser.id}`) === 'true') {
+          setSessionMessage('سجل انصرافك قبل تسجيل الخروج حتى لا يتوقف التتبع أثناء الشيفت'); return;
+        }
+        if ((await pendingEvents(currentUser.id)).length) {
+          setSessionMessage('وصل الهاتف بالإنترنت وزامن الأحداث قبل تسجيل الخروج'); return;
+        }
+      }
       await fetch('/api/auth/logout', { method: 'POST' });
+      localStorage.removeItem('attendance-offline-user');
       setCurrentUser(null);
     } catch {
       setCurrentUser(null);
@@ -85,10 +100,11 @@ export default function Home() {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <Navbar user={currentUser} onLogout={handleLogout} />
+      {sessionMessage && <p role="alert" className="tracker-warning" style={{margin:16}}>{sessionMessage}</p>}
 
       <main style={{ flex: 1, paddingBottom: '40px' }}>
         {!currentUser ? (
-          <LoginScreen onLoginSuccess={(u) => setCurrentUser(u)} />
+          <LoginScreen onLoginSuccess={(u) => { setCurrentUser(u); setSessionMessage(''); if (u.role === 'employee') localStorage.setItem('attendance-offline-user', JSON.stringify(u)); }} />
         ) : currentUser.role === 'admin' ? (
           <AdminDashboard user={currentUser} />
         ) : (

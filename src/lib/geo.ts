@@ -1,6 +1,8 @@
 // Geolocation & attendance calculations
 
+export interface Branch { id: string; name: string; lat: number; lng: number; radius: number; is_active?: boolean }
 export interface StoreSettings {
+  branches?: Branch[];
   id: string;
   branch1_name: string;
   branch1_lat: number;
@@ -43,7 +45,7 @@ export function determineBranchLocation(
   userLng: number,
   settings: StoreSettings
 ): {
-  branch_id: 'branch1' | 'branch2' | 'outside';
+  branch_id: string;
   branch_name: string;
   distance1: number;
   distance2: number;
@@ -55,6 +57,13 @@ export function determineBranchLocation(
 
   const inside1 = dist1 <= settings.branch1_radius;
   const inside2 = dist2 <= settings.branch2_radius;
+
+  if (settings.branches) {
+    const nearest = settings.branches.filter(b => b.is_active !== false)
+      .map(b => ({ ...b, distance: calculateDistance(userLat, userLng, b.lat, b.lng) }))
+      .filter(b => b.distance <= b.radius).sort((a,b) => a.distance - b.distance)[0];
+    return { branch_id: nearest?.id || 'outside', branch_name: nearest?.name || 'خارج الفروع', distance1: dist1, distance2: dist2, inside1, inside2 };
+  }
 
   if (inside1 && inside2) {
     // If inside both overlapping geofences, choose the closest one
@@ -112,6 +121,19 @@ export function determineBranchLocation(
 }
 
 // Convert minutes to readable Arabic text (e.g. 7 ساعات و 45 دقيقة)
+export function verifiedBranchLocation(lat: number, lng: number, accuracy: number, settings: StoreSettings) {
+  const result = determineBranchLocation(lat, lng, settings);
+  const branches = settings.branches || [
+    {id:'branch1',name:settings.branch1_name,lat:settings.branch1_lat,lng:settings.branch1_lng,radius:settings.branch1_radius},
+    {id:'branch2',name:settings.branch2_name,lat:settings.branch2_lat,lng:settings.branch2_lng,radius:settings.branch2_radius},
+  ];
+  const distances = branches.map(branch => ({...branch,distance:calculateDistance(lat,lng,branch.lat,branch.lng)}));
+  const confirmed = distances.filter(b=>b.distance+accuracy<=b.radius).sort((a,b)=>a.distance-b.distance)[0];
+  if (confirmed) return {...result,branch_id:confirmed.id,branch_name:confirmed.name};
+  if (distances.some(b=>b.distance-accuracy<=b.radius)) return {...result,branch_id:'unknown',branch_name:'موقع غير مؤكد عند حدود الفرع'};
+  return {...result,branch_id:'outside',branch_name:'خارج الفروع'};
+}
+
 export function formatDurationArabic(minutes: number): string {
   const totalMins = Math.max(0, Math.round(minutes));
   const hours = Math.floor(totalMins / 60);
@@ -138,7 +160,8 @@ export function formatDurationArabic(minutes: number): string {
 export function evaluatePunctuality(
   firstArrivalTime: Date | string | null,
   shiftStartTimeStr: string = '10:00',
-  gracePeriodMins: number = 30
+  gracePeriodMins: number = 30,
+  scheduledStart?: Date,
 ): {
   status: 'early' | 'on_time' | 'late' | 'absent';
   label: string;
@@ -160,8 +183,8 @@ export function evaluatePunctuality(
   const [shiftHour, shiftMin] = shiftStartTimeStr.split(':').map(Number);
 
   // Shift start datetime on the same day as arrival
-  const shiftStart = new Date(arrival);
-  shiftStart.setHours(shiftHour, shiftMin, 0, 0);
+  const shiftStart = scheduledStart || new Date(arrival);
+  if (!scheduledStart) shiftStart.setHours(shiftHour, shiftMin, 0, 0);
 
   // Difference in minutes: arrival - shiftStart
   const diffMins = Math.round((arrival.getTime() - shiftStart.getTime()) / (1000 * 60));

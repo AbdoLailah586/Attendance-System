@@ -1,748 +1,128 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  MapPin,
-  Clock,
-  Compass,
-  CheckCircle2,
-  AlertTriangle,
-  RefreshCw,
-  Volume2,
-  VolumeX,
-  Play,
-  Square,
-  ShieldAlert,
-  Sparkles,
-  Info,
-  Calendar,
-} from 'lucide-react';
-import { formatDurationArabic } from '@/lib/geo';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { MapPin, Play, Square, RefreshCw, Wifi, WifiOff, Clock, ShieldCheck } from 'lucide-react';
+import { verifiedBranchLocation, StoreSettings } from '@/lib/geo';
+import { EventType, pendingEvents, saveEvent, syncEvents } from '@/lib/offline';
+import { buildReport } from '@/lib/attendance';
 
-interface EmployeeTrackerProps {
-  user: {
-    id: number;
-    username: string;
-    name: string;
-    shift_start?: string;
-    shift_end?: string;
-  };
-}
-
-export default function EmployeeTracker({ user }: EmployeeTrackerProps) {
-  const [currentLocation, setCurrentLocation] = useState<{
-    lat: number;
-    lng: number;
-    accuracy: number;
-  } | null>(null);
-
-  const [geoStatus, setGeoStatus] = useState<'idle' | 'tracking' | 'error'>('idle');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [activeBranch, setActiveBranch] = useState<'branch1' | 'branch2' | 'outside' | null>(null);
-  const [distances, setDistances] = useState<{ d1: number; d2: number } | null>(null);
-  const [lastPingTime, setLastPingTime] = useState<Date | null>(null);
-  const [secondsUntilPing, setSecondsUntilPing] = useState(60);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [isClockedIn, setIsClockedIn] = useState(true);
-  const [todaySummary, setTodaySummary] = useState<any>(null);
-  const [settings, setSettings] = useState<any>(null);
-  const [loadingSummary, setLoadingSummary] = useState(false);
-
-  // Audio tone generator using Web Audio API
-  const playChime = (type: 'enter' | 'leave' | 'ping') => {
-    if (!soundEnabled || typeof window === 'undefined') return;
-    try {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContext) return;
-      const ctx = new AudioContext();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      if (type === 'enter') {
-        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
-        gain.gain.setValueAtTime(0.15, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.35);
-      } else if (type === 'leave') {
-        osc.frequency.setValueAtTime(659.25, ctx.currentTime); // E5
-        osc.frequency.setValueAtTime(440, ctx.currentTime + 0.1); // A4
-        gain.gain.setValueAtTime(0.15, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.35);
-      } else {
-        // ping
-        osc.frequency.setValueAtTime(800, ctx.currentTime);
-        gain.gain.setValueAtTime(0.05, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.1);
-      }
-    } catch {
-      // ignore audio errors
-    }
-  };
-
-  // Fetch settings & today's summary
-  const fetchSummary = async () => {
-    try {
-      setLoadingSummary(true);
-      const res = await fetch(`/api/attendance/report?userId=${user.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setSettings(data.settings);
-        if (data.reports && data.reports.length > 0) {
-          setTodaySummary(data.reports[0]);
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoadingSummary(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchSummary();
+type PersonalReport = ReturnType<typeof buildReport>;
+interface Props { user: { id: number; name: string; username: string; shift_start?: string; shift_end?: string } }
+export default function EmployeeTracker({ user }: Props) {
+  const [settings, setSettings] = useState<StoreSettings | null>(null);
+  const [report, setReport] = useState<PersonalReport | null>(null);
+  const [onDuty, setOnDuty] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [online, setOnline] = useState(true);
+  const [queued, setQueued] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [syncError, setSyncError] = useState('');
+  const [position, setPosition] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const capturing = useRef(false);
+  const duty = useRef(false);
+  const storageKey = `attendance-duty-${user.id}`;
+  const refresh = useCallback(async () => {
+    const response = await fetch('/api/attendance/report', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('تعذر تحديث التقرير');
+    const data = await response.json();
+    setSettings(data.settings); setReport(data.reports?.[0] || null);
+    localStorage.setItem(`attendance-summary-${user.id}`, JSON.stringify(data));
+    return data;
   }, [user.id]);
-
-  // Send ping to backend
-  const sendPing = async (lat: number, lng: number, accuracy: number, eventType: string = 'ping') => {
+  const sync = useCallback(async () => {
     try {
-      const res = await fetch('/api/attendance/ping', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lat,
-          lng,
-          accuracy,
-          event_type: eventType,
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error('فشل إرسال نبضة الحضور');
-      }
-
-      const data = await res.json();
-      const prevBranch = activeBranch;
-      const newBranch = data.location.branch_id;
-
-      setActiveBranch(newBranch);
-      setDistances({
-        d1: data.location.distance1,
-        d2: data.location.distance2,
-      });
-      setLastPingTime(new Date());
-      setSecondsUntilPing(data.settings?.ping_interval_secs || 60);
-
-      if (prevBranch && prevBranch !== newBranch) {
-        if (newBranch === 'branch1' || newBranch === 'branch2') {
-          playChime('enter');
-        } else {
-          playChime('leave');
-        }
-      } else {
-        playChime('ping');
-      }
-
-      fetchSummary();
-    } catch (err: any) {
-      console.error('Ping error:', err);
-    }
-  };
-
-  // Acquire current location
-  const performLocationCheck = (eventType: string = 'ping') => {
-    if (typeof window === 'undefined' || !navigator.geolocation) {
-      setGeoStatus('error');
-      setErrorMessage('خدمة تحديد المواقع (GPS) غير مدعومة في هذا المتصفح');
-      return;
-    }
-
-    setGeoStatus('tracking');
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        setCurrentLocation({ lat: latitude, lng: longitude, accuracy });
-        setErrorMessage(null);
-        sendPing(latitude, longitude, accuracy, eventType);
-      },
-      (err) => {
-        console.warn('Geolocation error:', err);
-        setGeoStatus('error');
-        if (err.code === 1) {
-          setErrorMessage('يرجى السماح بالوصول للموقع الجغرافي (GPS) لتسجيل الحضور');
-        } else {
-          setErrorMessage('تعذر التقاط الموقع بدقة، يرجى التأكد من تشغيل الـ GPS');
-        }
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 10000,
-      }
-    );
-  };
-
-  // 60-second ping interval & countdown timer
+      setQueued((await pendingEvents(user.id)).length);
+      if (!navigator.onLine) return;
+      await syncEvents(user.id);
+      setSyncError('');
+      setQueued((await pendingEvents(user.id)).length);
+      await refresh();
+    } catch (error) { setSyncError(error instanceof Error ? error.message : 'الأحداث محفوظة؛ المزامنة مؤجلة'); }
+  }, [user.id, refresh]);
   useEffect(() => {
-    if (!isClockedIn) return;
-
-    // Initial check
-    performLocationCheck('clock_in');
-
-    const countdown = setInterval(() => {
-      setSecondsUntilPing((prev) => {
-        if (prev <= 1) {
-          performLocationCheck('ping');
-          return 60;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(countdown);
-  }, [isClockedIn]);
-
-  // Test simulation helper
-  const simulateLocation = (type: 'branch1' | 'branch2' | 'outside') => {
-    if (!settings) return;
-    let lat = settings.branch1_lat;
-    let lng = settings.branch1_lng;
-
-    if (type === 'branch2') {
-      lat = settings.branch2_lat;
-      lng = settings.branch2_lng;
-    } else if (type === 'outside') {
-      lat = settings.branch1_lat + 0.003;
-      lng = settings.branch1_lng + 0.003;
-    }
-
-    setCurrentLocation({ lat, lng, accuracy: 3.5 });
-    sendPing(lat, lng, 3.5, 'ping');
-  };
-
-  return (
-    <div className="app-container" style={{ maxWidth: '640px' }}>
-      {/* Employee Greeting & Shift Target */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '16px',
-        }}
-      >
-        <div>
-          <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#0f172a' }}>
-            مرحباً، {user.name} 👋
-          </h2>
-          <p style={{ fontSize: '0.85rem', color: '#64748b' }}>
-            الشيفت: {user.shift_start || '10:00'} ص - {user.shift_end || '10:00'} م
-          </p>
-        </div>
-
-        <button
-          onClick={() => setSoundEnabled(!soundEnabled)}
-          className="btn btn-secondary btn-sm"
-          style={{ padding: '8px 12px', borderRadius: '10px' }}
-          title={soundEnabled ? 'كتم الإشعارات الصوتية' : 'تفعيل الإشعارات الصوتية'}
-        >
-          {soundEnabled ? <Volume2 size={18} color="#059669" /> : <VolumeX size={18} color="#94a3b8" />}
-          <span style={{ fontSize: '0.8rem' }}>{soundEnabled ? 'الصوت مفعّل' : 'صامت'}</span>
-        </button>
-      </div>
-
-      {/* Main Status Hero Card */}
-      <div
-        className="card"
-        style={{
-          borderWidth: '2px',
-          borderColor:
-            activeBranch === 'branch1'
-              ? 'var(--branch1-border)'
-              : activeBranch === 'branch2'
-              ? 'var(--branch2-border)'
-              : activeBranch === 'outside'
-              ? 'var(--outside-border)'
-              : '#e2e8f0',
-          background:
-            activeBranch === 'branch1'
-              ? 'linear-gradient(180deg, #ffffff 0%, #f0fdf4 100%)'
-              : activeBranch === 'branch2'
-              ? 'linear-gradient(180deg, #ffffff 0%, #f5f3ff 100%)'
-              : activeBranch === 'outside'
-              ? 'linear-gradient(180deg, #ffffff 0%, #fffbeb 100%)'
-              : '#ffffff',
-          borderRadius: '24px',
-          padding: '24px',
-          marginBottom: '20px',
-          textAlign: 'center',
-          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05)',
-        }}
-      >
-        {/* Branch Status Badge */}
-        <div style={{ marginBottom: '16px' }}>
-          {activeBranch === 'branch1' ? (
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 18px',
-                borderRadius: '9999px',
-                background: '#ecfdf5',
-                color: '#059669',
-                border: '1px solid #a7f3d0',
-                fontWeight: 800,
-                fontSize: '1.05rem',
-              }}
-            >
-              <span className="pulse-dot online" />
-              <span>أنت الآن داخل: {settings?.branch1_name || 'المحل الأول'}</span>
-            </div>
-          ) : activeBranch === 'branch2' ? (
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 18px',
-                borderRadius: '9999px',
-                background: '#eef2ff',
-                color: '#4f46e5',
-                border: '1px solid #c7d2fe',
-                fontWeight: 800,
-                fontSize: '1.05rem',
-              }}
-            >
-              <span className="pulse-dot online" />
-              <span>أنت الآن داخل: {settings?.branch2_name || 'المحل الثاني'}</span>
-            </div>
-          ) : activeBranch === 'outside' ? (
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 18px',
-                borderRadius: '9999px',
-                background: '#fffbeb',
-                color: '#d97706',
-                border: '1px solid #fde68a',
-                fontWeight: 800,
-                fontSize: '1.05rem',
-              }}
-            >
-              <AlertTriangle size={18} />
-              <span>أنت حالياً خارج نطاق المحلين</span>
-            </div>
-          ) : (
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 18px',
-                borderRadius: '9999px',
-                background: '#f1f5f9',
-                color: '#64748b',
-                border: '1px solid #cbd5e1',
-                fontWeight: 700,
-                fontSize: '1rem',
-              }}
-            >
-              <Compass size={18} />
-              <span>جاري تحديد موقعك الجغرافي...</span>
-            </div>
-          )}
-        </div>
-
-        {/* Distances to both branches */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '12px',
-            margin: '20px 0',
-          }}
-        >
-          <div
-            style={{
-              padding: '12px',
-              borderRadius: '14px',
-              background: '#ffffff',
-              border: '1px solid #e2e8f0',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-            }}
-          >
-            <span style={{ fontSize: '0.8rem', color: '#64748b', display: 'block', marginBottom: '4px' }}>
-              {settings?.branch1_name || 'المحل الأول'}
-            </span>
-            <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#059669' }}>
-              {distances ? `${distances.d1} متر` : '--'}
-            </div>
-            <span style={{ fontSize: '0.725rem', color: '#94a3b8' }}>
-              النطاق المسموح: {settings?.branch1_radius || 40} م
-            </span>
-          </div>
-
-          <div
-            style={{
-              padding: '12px',
-              borderRadius: '14px',
-              background: '#ffffff',
-              border: '1px solid #e2e8f0',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-            }}
-          >
-            <span style={{ fontSize: '0.8rem', color: '#64748b', display: 'block', marginBottom: '4px' }}>
-              {settings?.branch2_name || 'المحل الثاني'}
-            </span>
-            <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#4f46e5' }}>
-              {distances ? `${distances.d2} متر` : '--'}
-            </div>
-            <span style={{ fontSize: '0.725rem', color: '#94a3b8' }}>
-              النطاق المسموح: {settings?.branch2_radius || 40} م
-            </span>
-          </div>
-        </div>
-
-        {/* 60-Second Countdown Meter */}
-        <div
-          style={{
-            background: '#ffffff',
-            borderRadius: '14px',
-            padding: '12px 16px',
-            border: '1px solid #e2e8f0',
-            marginBottom: '16px',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              fontSize: '0.825rem',
-              color: '#64748b',
-              marginBottom: '8px',
-            }}
-          >
-            <span>التحديث التلقائي للموقع (كل 60 ثانية)</span>
-            <span style={{ fontWeight: 700, color: '#2563eb' }}>
-              متبقي: {secondsUntilPing} ثانية
-            </span>
-          </div>
-          <div
-            style={{
-              height: '6px',
-              background: '#f1f5f9',
-              borderRadius: '9999px',
-              overflow: 'hidden',
-            }}
-          >
-            <div
-              style={{
-                height: '100%',
-                width: `${((60 - secondsUntilPing) / 60) * 100}%`,
-                background: 'linear-gradient(90deg, #3b82f6, #2563eb)',
-                transition: 'width 1s linear',
-              }}
-            />
-          </div>
-        </div>
-
-        {/* GPS accuracy & time info */}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            fontSize: '0.8rem',
-            color: '#64748b',
-          }}
-        >
-          <span>
-            دقة الـ GPS:{' '}
-            <strong style={{ color: '#0f172a' }}>
-              {currentLocation ? `± ${Math.round(currentLocation.accuracy)} متر` : 'غير متوفر'}
-            </strong>
-          </span>
-          <span>
-            آخر تسجيل:{' '}
-            <strong style={{ color: '#0f172a' }}>
-              {lastPingTime ? lastPingTime.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--'}
-            </strong>
-          </span>
-        </div>
-
-        {errorMessage && (
-          <div
-            style={{
-              marginTop: '16px',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              background: '#fef2f2',
-              color: '#dc2626',
-              fontSize: '0.85rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              textAlign: 'right',
-            }}
-          >
-            <ShieldAlert size={18} />
-            <span>{errorMessage}</span>
-          </div>
-        )}
-
-        {/* Action Buttons */}
-        <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-          <button
-            onClick={() => performLocationCheck('ping')}
-            className="btn btn-secondary"
-            style={{ flex: 1, padding: '12px' }}
-          >
-            <RefreshCw size={16} />
-            <span>تحديث موقعي الآن</span>
-          </button>
-
-          <button
-            onClick={() => {
-              if (isClockedIn) {
-                performLocationCheck('clock_out');
-                setIsClockedIn(false);
-              } else {
-                setIsClockedIn(true);
-                performLocationCheck('clock_in');
-              }
-            }}
-            className="btn"
-            style={{
-              flex: 1,
-              padding: '12px',
-              background: isClockedIn ? '#dc2626' : '#059669',
-              color: '#ffffff',
-            }}
-          >
-            {isClockedIn ? (
-              <>
-                <Square size={16} />
-                <span>تسجيل انصراف</span>
-              </>
-            ) : (
-              <>
-                <Play size={16} />
-                <span>تسجيل حضور</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Test Simulation Controls */}
-        <div
-          style={{
-            marginTop: '20px',
-            paddingTop: '16px',
-            borderTop: '1px dashed #cbd5e1',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '6px',
-              fontSize: '0.75rem',
-              color: '#64748b',
-              marginBottom: '10px',
-            }}
-          >
-            <Sparkles size={14} color="#6366f1" />
-            <span>محاكاة تجريبية لتغيير موقعك (للتجربة والفحص السريع):</span>
-          </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              type="button"
-              onClick={() => simulateLocation('branch1')}
-              className="btn btn-secondary btn-sm"
-              style={{ flex: 1, fontSize: '0.75rem', color: '#059669', borderColor: '#a7f3d0' }}
-            >
-              🟢 داخل المحل الأول
-            </button>
-            <button
-              type="button"
-              onClick={() => simulateLocation('branch2')}
-              className="btn btn-secondary btn-sm"
-              style={{ flex: 1, fontSize: '0.75rem', color: '#4f46e5', borderColor: '#c7d2fe' }}
-            >
-              🔵 داخل المحل الثاني
-            </button>
-            <button
-              type="button"
-              onClick={() => simulateLocation('outside')}
-              className="btn btn-secondary btn-sm"
-              style={{ flex: 1, fontSize: '0.75rem', color: '#d97706', borderColor: '#fde68a' }}
-            >
-              🟠 خارج المحلين
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Today's Stats & Summary Card */}
-      <div className="card" style={{ borderRadius: '20px', padding: '20px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h3 className="card-title" style={{ fontSize: '1.05rem', margin: 0 }}>
-            <Calendar size={18} color="#2563eb" />
-            <span>ملخص حضورك وساعات عملك اليوم</span>
-          </h3>
-          <button
-            onClick={fetchSummary}
-            className="btn btn-secondary btn-sm"
-            style={{ padding: '4px 8px' }}
-            title="تحديث الإحصائيات"
-          >
-            <RefreshCw size={14} />
-          </button>
-        </div>
-
-        {todaySummary ? (
-          <div>
-            {/* Punctuality Badge */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '12px 14px',
-                background: '#f8fafc',
-                borderRadius: '12px',
-                border: '1px solid #e2e8f0',
-                marginBottom: '16px',
-              }}
-            >
-              <div>
-                <span style={{ fontSize: '0.775rem', color: '#64748b', display: 'block' }}>
-                  وقت أول وصول للمحل:
-                </span>
-                <strong style={{ fontSize: '0.95rem', color: '#0f172a' }}>
-                  {todaySummary.firstArrival
-                    ? new Date(todaySummary.firstArrival).toLocaleTimeString('ar-EG', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })
-                    : 'لم يبدأ بعد'}
-                </strong>
-              </div>
-
-              <span className={`badge ${todaySummary.punctuality.badgeClass}`}>
-                {todaySummary.punctuality.label}
-              </span>
-            </div>
-
-            {/* Hours Breakdown */}
-            <div className="grid-3" style={{ gap: '10px', marginBottom: '16px' }}>
-              <div
-                style={{
-                  background: '#f8fafc',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  border: '1px solid #e2e8f0',
-                  textAlign: 'center',
-                }}
-              >
-                <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'block', marginBottom: '4px' }}>
-                  إجمالي الحضور
-                </span>
-                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0f172a' }}>
-                  {todaySummary.summary.totalFormatted}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  background: 'var(--branch1-bg)',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  border: '1px solid var(--branch1-border)',
-                  textAlign: 'center',
-                }}
-              >
-                <span style={{ fontSize: '0.75rem', color: '#059669', display: 'block', marginBottom: '4px' }}>
-                  المحل الأول
-                </span>
-                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#059669' }}>
-                  {todaySummary.summary.branch1Formatted}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  background: 'var(--branch2-bg)',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  border: '1px solid var(--branch2-border)',
-                  textAlign: 'center',
-                }}
-              >
-                <span style={{ fontSize: '0.75rem', color: '#4f46e5', display: 'block', marginBottom: '4px' }}>
-                  المحل الثاني
-                </span>
-                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#4f46e5' }}>
-                  {todaySummary.summary.branch2Formatted}
-                </div>
-              </div>
-            </div>
-
-            {/* Timeline track if available */}
-            {todaySummary.timeline && todaySummary.timeline.length > 0 && (
-              <div>
-                <span style={{ fontSize: '0.775rem', color: '#64748b', display: 'block', marginBottom: '6px' }}>
-                  سجل التنقل بين الفرعين اليوم:
-                </span>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {todaySummary.timeline.map((item: any, idx: number) => (
-                    <div
-                      key={idx}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        fontSize: '0.8rem',
-                        padding: '6px 10px',
-                        background: '#f8fafc',
-                        borderRadius: '8px',
-                        borderRight: `4px solid ${
-                          item.branch_id === 'branch1'
-                            ? '#059669'
-                            : item.branch_id === 'branch2'
-                            ? '#4f46e5'
-                            : '#f59e0b'
-                        }`,
-                      }}
-                    >
-                      <span style={{ fontWeight: 600 }}>{item.branch_name}</span>
-                      <span style={{ color: '#64748b' }}>
-                        {new Date(item.start).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })} -{' '}
-                        {new Date(item.end).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })} ({item.durationFormatted})
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8', fontSize: '0.9rem' }}>
-            جاري تحميل إحصائيات حضورك اليوم...
-          </div>
-        )}
-      </div>
-    </div>
-  );
+    let mounted = true;
+    const boot = async () => {
+      setOnline(navigator.onLine);
+      try {
+        const cached = localStorage.getItem(`attendance-summary-${user.id}`);
+        if (cached) { const data = JSON.parse(cached); setSettings(data.settings); setReport(data.reports?.[0] || null); }
+        const queue = await pendingEvents(user.id);
+        setQueued(queue.length);
+        const stored = localStorage.getItem(storageKey);
+        let active = stored === 'true';
+        if (stored === null && navigator.onLine) { const data = await refresh(); active = Boolean(data.reports?.[0]?.onDuty); }
+        // A queued clock-out takes priority over an older server state.
+        const lastControl = queue.filter(e => e.event_type !== 'ping').at(-1);
+        if (lastControl) active = lastControl.event_type === 'clock_in';
+        if (mounted) { duty.current = active; setOnDuty(active); setReady(true); }
+        await sync();
+        if (navigator.storage?.persist) void navigator.storage.persist();
+      } catch (error) { if (mounted) { setMessage(error instanceof Error ? error.message : 'تعذر تحميل الحضور'); setReady(true); } }
+    };
+    void boot();
+    const connection = () => { setOnline(navigator.onLine); if (navigator.onLine) void sync(); };
+    window.addEventListener('online', connection); window.addEventListener('offline', connection);
+    const timer = setInterval(() => void sync(), 30000);
+    return () => { mounted = false; clearInterval(timer); window.removeEventListener('online', connection); window.removeEventListener('offline', connection); };
+  }, [user.id, storageKey, refresh, sync]);
+  const capture = useCallback(async (type: EventType) => {
+    if (capturing.current || (type === 'ping' && !duty.current)) return;
+    capturing.current = true; setBusy(true); setMessage('');
+    try {
+      let location: { lat: number; lng: number; accuracy: number } | null = null;
+      if (type !== 'clock_out') {
+        const fix = await new Promise<GeolocationPosition>((resolve, reject) => {
+          if (!navigator.geolocation) return reject(new Error('الجهاز لا يدعم الموقع'));
+          navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error('شغّل GPS واسمح بالوصول للموقع ثم حاول مرة أخرى')), { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+        });
+        location = { lat: fix.coords.latitude, lng: fix.coords.longitude, accuracy: fix.coords.accuracy };
+      }
+      const saved = await saveEvent({ user_id: user.id, recorded_at: new Date().toISOString(), event_type: type, lat: location?.lat ?? null, lng: location?.lng ?? null, accuracy: location?.accuracy ?? null });
+      if (location) setPosition(location);
+      setLastSaved(saved.recorded_at);
+      if (type !== 'ping') {
+        duty.current = type === 'clock_in'; setOnDuty(duty.current);
+        localStorage.setItem(storageKey, String(duty.current));
+      }
+      setMessage(type === 'clock_in' ? 'تم حفظ بدء الشيفت على الهاتف' : type === 'clock_out' ? 'تم حفظ الانصراف وإيقاف التتبع' : 'تم حفظ الموقع على الهاتف');
+      await sync();
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'تعذر حفظ الحدث؛ حاول مرة أخرى'); }
+    finally { capturing.current = false; setBusy(false); }
+  }, [user.id, storageKey, sync]);
+  useEffect(() => {
+    if (!ready || !onDuty) return;
+    // Resuming a page only records a ping; it never creates a second clock-in.
+    const timer = setInterval(() => void capture('ping'), Math.max(15, settings?.ping_interval_secs || 60) * 1000);
+    const visible = () => { if (document.visibilityState === 'visible') void capture('ping'); };
+    document.addEventListener('visibilitychange', visible);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', visible); };
+  }, [ready, onDuty, settings?.ping_interval_secs, capture]);
+  const geo = position && settings ? verifiedBranchLocation(position.lat, position.lng, position.accuracy, settings) : null;
+  const locationName = geo?.branch_name || 'لم يتم التقاط الموقع بعد';
+  const metrics = report ? [
+    ['حضور داخل الفروع', report.summary.totalFormatted], ['عمل خلال الشيفت', report.summary.regularFormatted],
+    ['إضافي بعد الشيفت', report.summary.overtimeFormatted], ['خارج الفروع', report.summary.outsideFormatted],
+    ['فجوات التتبع', report.summary.unknownFormatted], ['عدد مرات الخروج', String(report.exitCount)],
+  ] : [];
+  return <div className="app-container employee-app">
+    <div className="tracker-greeting"><div><p className="eyebrow">الحضور الذكي · بتوقيت القاهرة</p><h2>مرحبًا، {user.name}</h2><p className="muted">الشيفت: {user.shift_start || '10:00'} — {user.shift_end || '22:00'}</p></div><ShieldCheck size={30} color="#0f766e" /></div>
+    <div className={`connection-banner ${online ? '' : 'offline'}`}><span>{online ? <Wifi size={18}/> : <WifiOff size={18}/>} {online ? 'متصل بالإنترنت' : 'بدون إنترنت · التسجيل مستمر على الهاتف'}</span><strong>{queued} أحداث بانتظار المزامنة</strong></div>
+    <section className="card shift-card"><p className="eyebrow">حالة الشيفت</p><h1>{onDuty ? 'الشيفت شغّال' : 'جاهز تبدأ يومك؟'}</h1><p className="location-label"><MapPin size={20}/>{locationName}</p>
+      <button className={`btn shift-button ${onDuty ? 'stop' : ''}`} disabled={!ready || busy} onClick={() => void capture(onDuty ? 'clock_out' : 'clock_in')}>{onDuty ? <Square size={20}/> : <Play size={20}/>} {busy ? 'جاري الحفظ…' : onDuty ? 'إنهاء الشيفت وتسجيل انصراف' : 'بدء الشيفت وتسجيل حضور'}</button>
+      <button className="btn btn-secondary" disabled={!onDuty || busy} onClick={() => void capture('ping')}><RefreshCw size={16}/>تحديث موقعي</button>
+      <p className="muted">{position ? `دقة GPS: ±${Math.round(position.accuracy)} متر` : 'الحضور يبدأ بعد التقاط موقعك وحفظ الحدث'}</p>
+      {lastSaved && <p className="muted">آخر حفظ محلي: {new Date(lastSaved).toLocaleTimeString('ar-EG', {timeZone:'Africa/Cairo'})}</p>}
+      {message && <p role="status" className="tracker-message">{message}</p>}
+      {syncError && <p role="alert" className="tracker-warning">{syncError} · {queued ? 'الأحداث ما زالت محفوظة على الهاتف' : ''}</p>}
+    </section>
+    <section className="card"><div className="section-title"><h3><Clock size={19}/> ملخص اليوم</h3><button className="btn btn-secondary btn-sm" onClick={() => void sync()}><RefreshCw size={15}/>مزامنة</button></div>
+      {report && <p className={`badge ${report.punctuality.badgeClass}`}>{report.punctuality.message}</p>}
+      <div className="metrics-grid">{metrics.map(([name,value]) => <div className="metric" key={name}><span>{name}</span><strong>{value}</strong></div>)}</div>
+      {report?.timeline.map((interval, i) => <div className="movement-row" key={i}><span>{interval.branch_name}</span><span>{new Date(interval.start).toLocaleTimeString('ar-EG',{timeZone:'Africa/Cairo',hour:'2-digit',minute:'2-digit'})} · {interval.durationFormatted}</span></div>)}
+      {queued > 0 && <p className="muted">الملخص يعرض ما وصل للسيرفر؛ الأحداث المحفوظة تظهر بعد المزامنة.</p>}
+    </section>
+    <p className="tracker-note">نسخة المتصفح تسجل الموقع أثناء فتحها. للتتبع مع قفل الشاشة استخدم تطبيق الهاتف واسمح بالموقع أثناء الشيفت. انقطاع GPS يظهر كفجوة تتبع.</p>
+  </div>;
 }

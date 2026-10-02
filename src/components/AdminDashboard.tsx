@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import {
   Radar,
   BarChart3,
-  Settings,
   Users,
   MapPin,
   Clock,
@@ -13,42 +12,42 @@ import {
   RefreshCw,
   Plus,
   Trash2,
-  Edit2,
   Copy,
   Download,
   Calendar,
   Sparkles,
-  ExternalLink,
   LocateFixed,
-  Shield,
-  UserCheck,
   Check,
 } from 'lucide-react';
 import AttendanceMap from './AttendanceMap';
-import { formatDurationArabic } from '@/lib/geo';
+import { localDate } from '@/lib/time';
+import AttendanceLogViewer from './AttendanceLogViewer';
+import BranchManager from './BranchManager';
+import type { AppUser, DailyReport, LiveEmployee } from '@/lib/types';
+import type { StoreSettings } from '@/lib/geo';
 
 interface AdminDashboardProps {
-  user: any;
+  user: AppUser;
 }
 
-export default function AdminDashboard({ user }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'live' | 'reports' | 'settings' | 'users'>('live');
+export default function AdminDashboard({}: AdminDashboardProps) {
+  const [activeTab, setActiveTab] = useState<'live' | 'reports' | 'settings' | 'users' | 'logs'>('live');
 
   // Live data
-  const [liveData, setLiveData] = useState<any[]>([]);
-  const [settings, setSettings] = useState<any>(null);
+  const [liveData, setLiveData] = useState<LiveEmployee[]>([]);
+  const [settings, setSettings] = useState<StoreSettings | null>(null);
   const [loadingLive, setLoadingLive] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoRefresh] = useState(true);
 
   // Reports data
-  const [reportDate, setReportDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [reports, setReports] = useState<any[]>([]);
+  const [reportDate, setReportDate] = useState(() => localDate());
+  const [reports, setReports] = useState<DailyReport[]>([]);
   const [loadingReports, setLoadingReports] = useState(false);
   const [selectedUserFilter, setSelectedUserFilter] = useState<string>('all');
 
   // Users data
-  const [usersList, setUsersList] = useState<any[]>([]);
-  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [usersList, setUsersList] = useState<AppUser[]>([]);
+  const [, setLoadingUsers] = useState(false);
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [newUserData, setNewUserData] = useState({
     name: '',
@@ -61,7 +60,8 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   const [copiedId, setCopiedId] = useState<number | null>(null);
 
   // Settings form data
-  const [settingsForm, setSettingsForm] = useState<any>({
+  const [settingsForm, setSettingsForm] = useState<StoreSettings>({
+    id: 'main',
     branch1_name: '',
     branch1_lat: 30.0444,
     branch1_lng: 31.2357,
@@ -77,7 +77,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   });
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState<string | null>(null);
-  const [editingBranchPin, setEditingBranchPin] = useState<'branch1' | 'branch2' | null>(null);
+
 
   // Seed demo state
   const [seedingDemo, setSeedingDemo] = useState(false);
@@ -85,7 +85,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   // Fetch live radar data
   const fetchLiveData = async () => {
     try {
-      setLoadingLive(true);
+
       const res = await fetch('/api/attendance/live');
       if (res.ok) {
         const data = await res.json();
@@ -105,7 +105,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   // Fetch reports data
   const fetchReports = async (date: string) => {
     try {
-      setLoadingReports(true);
+
       const res = await fetch(`/api/attendance/report?date=${date}`);
       if (res.ok) {
         const data = await res.json();
@@ -121,7 +121,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   // Fetch users list
   const fetchUsers = async () => {
     try {
-      setLoadingUsers(true);
+
       const res = await fetch('/api/users');
       if (res.ok) {
         const data = await res.json();
@@ -136,9 +136,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
 
   // Initial load
   useEffect(() => {
-    fetchLiveData();
-    fetchReports(reportDate);
-    fetchUsers();
+    queueMicrotask(() => { void fetchLiveData(); void fetchReports(localDate()); void fetchUsers(); });
   }, []);
 
   // Auto refresh interval for live tab
@@ -164,7 +162,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
       } else {
         alert(data.error);
       }
-    } catch (err) {
+    } catch {
       alert('حدث خطأ أثناء توليد البيانات');
     } finally {
       setSeedingDemo(false);
@@ -196,14 +194,14 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
       });
       fetchUsers();
       fetchLiveData();
-    } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء إضافة الموظف');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'حدث خطأ أثناء إضافة الموظف');
     }
   };
 
   // Delete User
   const handleDeleteUser = async (id: number, name: string) => {
-    if (!confirm(`هل أنت متأكد من حذف حساب الموظف: ${name}؟`)) return;
+    if (!confirm(`هل تريد تعطيل حساب الموظف: ${name} مع الاحتفاظ بسجلاته؟`)) return;
     try {
       const res = await fetch(`/api/users?id=${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -238,15 +236,15 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
       setSettingsSuccessMsg('تم حفظ وتحديث إعدادات الفروع والشيفتات بنجاح!');
       setTimeout(() => setSettingsSuccessMsg(null), 4000);
       fetchLiveData();
-    } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء حفظ الإعدادات');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'حدث خطأ أثناء حفظ الإعدادات');
     } finally {
       setSavingSettings(false);
     }
   };
 
   // Use current GPS location for Branch
-  const useCurrentLocationForBranch = (branch: 'branch1' | 'branch2') => {
+  const captureCurrentLocationForBranch = (branch: 'branch1' | 'branch2') => {
     if (typeof window === 'undefined' || !navigator.geolocation) {
       alert('خدمة الـ GPS غير مدعومة في جهازك');
       return;
@@ -256,13 +254,13 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
       (pos) => {
         const { latitude, longitude } = pos.coords;
         if (branch === 'branch1') {
-          setSettingsForm((prev: any) => ({ ...prev, branch1_lat: latitude, branch1_lng: longitude }));
+          setSettingsForm((prev: StoreSettings) => ({ ...prev, branch1_lat: latitude, branch1_lng: longitude }));
         } else {
-          setSettingsForm((prev: any) => ({ ...prev, branch2_lat: latitude, branch2_lng: longitude }));
+          setSettingsForm((prev: StoreSettings) => ({ ...prev, branch2_lat: latitude, branch2_lng: longitude }));
         }
         alert(`تم التقاط إحداثيات موقعك الحالي بنجاح لـ ${branch === 'branch1' ? 'المحل الأول' : 'المحل الثاني'}`);
       },
-      (err) => {
+      () => {
         alert('تعذر جلب موقعك الحالي. تأكد من تفعيل الـ GPS والسماح للمتصفح بالوصول.');
       },
       { enableHighAccuracy: true }
@@ -270,41 +268,20 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   };
 
   // Copy credentials helper
-  const copyCredentials = (u: string, p: string, id: number) => {
-    const text = `بيانات تسجيل دخول الموظف في نظام الحضور:\nالمستخدم: ${u}\nكلمة المرور: ${p}`;
+  const copyCredentials = (u: string, id: number) => {
+    const text = `نظام الحضور: ${window.location.origin}\nالمستخدم: ${u}\nاطلب كلمة المرور من المدير عند إنشاء حسابك`;
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2500);
   };
 
-  // Export CSV
+  // Escape spreadsheet formulas, quotes, and newlines in exported user data.
   const exportToCSV = () => {
-    if (reports.length === 0) return;
-    let csvContent = 'data:text/csv;charset=utf-8,\uFEFF';
-    csvContent += 'اسم الموظف,اسم المستخدم,إجمالي الحضور,المحل الأول,المحل الثاني,خارج المحلين,أول وصول,آخر انصراف,حالة الانضباط\n';
-
-    reports.forEach((r) => {
-      const row = [
-        `"${r.user.name}"`,
-        `"${r.user.username}"`,
-        `"${r.summary.totalFormatted}"`,
-        `"${r.summary.branch1Formatted}"`,
-        `"${r.summary.branch2Formatted}"`,
-        `"${r.summary.outsideFormatted}"`,
-        `"${r.firstArrival ? new Date(r.firstArrival).toLocaleTimeString('ar-EG') : 'لم يحضر'}"`,
-        `"${r.lastDeparture ? new Date(r.lastDeparture).toLocaleTimeString('ar-EG') : 'لم يحضر'}"`,
-        `"${r.punctuality.label}"`,
-      ];
-      csvContent += row.join(',') + '\n';
-    });
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `تقرير_حضور_وانصراف_${reportDate}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const quote = (value: unknown) => '"' + String(value ?? '').replace(/^[=+@-]/, "'$&").replaceAll('"', '""') + '"';
+    const rows = reports.map(r=>[r.user.name,r.user.username,r.summary.totalMinutes,r.summary.regularMinutes,r.summary.overtimeMinutes,r.summary.outsideMinutes,r.summary.unknownMinutes,r.exitCount,r.firstArrival,r.lastDeparture,r.punctuality.label]);
+    const csv = '\uFEFF' + [['الموظف','المستخدم','حضور بالدقائق','خلال الشيفت','إضافي','خارج الفروع','فجوات تتبع','مرات الخروج','أول وصول','آخر انصراف','الانضباط'],...rows].map(row=>row.map(quote).join(',')).join('\r\n');
+    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+    const link=document.createElement('a');link.href=url;link.download='attendance-'+reportDate+'.csv';link.click();URL.revokeObjectURL(url);
   };
 
   // Filtered reports
@@ -336,7 +313,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button
+          {process.env.NEXT_PUBLIC_ENABLE_DEMO === 'true' && <button
             onClick={handleSeedDemo}
             disabled={seedingDemo}
             className="btn btn-secondary btn-sm"
@@ -345,7 +322,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
           >
             <Sparkles size={16} />
             <span>{seedingDemo ? 'جاري التوليد...' : 'توليد بيانات تجريبية لليوم'}</span>
-          </button>
+          </button>}
 
           <button
             onClick={() => {
@@ -363,6 +340,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
 
       {/* Navigation Tabs */}
       <div className="tab-list">
+        <button className={`tab-button ${activeTab === 'logs' ? 'active' : ''}`} onClick={() => setActiveTab('logs')}>كل سجلات الحضور والحركة</button>
         <button
           className={`tab-button ${activeTab === 'live' ? 'active' : ''}`}
           onClick={() => setActiveTab('live')}
@@ -407,6 +385,8 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
       </div>
 
       {/* TAB 1: LIVE RADAR & MAP */}
+      {activeTab === 'logs' && <AttendanceLogViewer />}
+      {activeTab === 'settings' && <BranchManager onSaved={fetchLiveData} />}
       {activeTab === 'live' && (
         <div>
           {/* Branch summary stats bar */}
@@ -475,6 +455,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
               </div>
 
               <AttendanceMap
+                branches={settings?.branches}
                 branch1={{
                   name: settings.branch1_name,
                   lat: settings.branch1_lat,
@@ -490,12 +471,12 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                 employees={liveData.map((e) => ({
                   id: e.user.id,
                   name: e.user.name,
-                  lat: e.latestLog?.lat || 0,
-                  lng: e.latestLog?.lng || 0,
+                  lat: e.latestLog?.lat ?? NaN,
+                  lng: e.latestLog?.lng ?? NaN,
                   branch_id: e.currentStatus,
                   isOnline: e.isOnline,
-                  distance1: e.latestLog?.distance_branch1,
-                  distance2: e.latestLog?.distance_branch2,
+                  distance1: e.latestLog?.distance_branch1 ?? 0,
+                  distance2: e.latestLog?.distance_branch2 ?? 0,
                 }))}
                 height="380px"
               />
@@ -559,6 +540,12 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                       <AlertTriangle size={14} />
                       <span>خارج المحلين</span>
                     </span>
+                  ) : settings?.branches?.some(b=>b.id===emp.currentStatus) ? (
+                    <span className="badge badge-branch1">{settings.branches.find(b=>b.id===emp.currentStatus)?.name}</span>
+                  ) : emp.currentStatus === 'clocked_out' ? (
+                    <span className="badge badge-offline">انتهى الشيفت</span>
+                  ) : emp.currentStatus === 'unknown' ? (
+                    <span className="badge badge-outside">موقع غير مؤكد</span>
                   ) : (
                     <span className="badge badge-offline">
                       <span className="pulse-dot offline" />
@@ -861,10 +848,18 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                   }}
                 >
                   <div>
+                    <div className="metrics-grid">
+                      <div>عمل خلال الشيفت: <strong>{report.summary.regularFormatted}</strong></div>
+                      <div>إضافي بعد الشيفت: <strong>{report.summary.overtimeFormatted}</strong></div>
+                      <div>فجوات التتبع: <strong>{report.summary.unknownFormatted}</strong></div>
+                      <div>خروج من الفروع: <strong>{report.exitCount} مرات</strong></div>
+                      <div>انصراف مبكر: <strong>{report.summary.earlyDepartureFormatted}</strong></div>
+                      {report.summary.branches?.filter((b: {id:string})=>!['branch1','branch2'].includes(b.id)).map((b: {id:string;name:string;formatted:string})=><div key={b.id}>{b.name}: <strong>{b.formatted}</strong></div>)}
+                    </div>
                     <span style={{ color: '#64748b' }}>وقت أول وصول للمحل (وصل إمتى): </span>
                     <strong style={{ color: '#0f172a' }}>
                       {report.firstArrival
-                        ? new Date(report.firstArrival).toLocaleTimeString('ar-EG', {
+                        ? new Date(report.firstArrival).toLocaleTimeString('ar-EG', { timeZone:'Africa/Cairo',
                             hour: '2-digit',
                             minute: '2-digit',
                             second: '2-digit',
@@ -877,7 +872,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                     <span style={{ color: '#64748b' }}>وقت آخر انصراف (مشى إمتى): </span>
                     <strong style={{ color: '#0f172a' }}>
                       {report.lastDeparture
-                        ? new Date(report.lastDeparture).toLocaleTimeString('ar-EG', {
+                        ? new Date(report.lastDeparture).toLocaleTimeString('ar-EG', { timeZone:'Africa/Cairo',
                             hour: '2-digit',
                             minute: '2-digit',
                             second: '2-digit',
@@ -908,7 +903,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                     </span>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {report.timeline.map((item: any, idx: number) => (
+                      {report.timeline.map((item, idx: number) => (
                         <div
                           key={idx}
                           style={{
@@ -953,14 +948,14 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                           <div style={{ color: '#475569' }}>
                             من الساعة{' '}
                             <strong>
-                              {new Date(item.start).toLocaleTimeString('ar-EG', {
+                              {new Date(item.start).toLocaleTimeString('ar-EG', { timeZone:'Africa/Cairo',
                                 hour: '2-digit',
                                 minute: '2-digit',
                               })}
                             </strong>{' '}
                             إلى الساعة{' '}
                             <strong>
-                              {new Date(item.end).toLocaleTimeString('ar-EG', {
+                              {new Date(item.end).toLocaleTimeString('ar-EG', { timeZone:'Africa/Cairo',
                                 hour: '2-digit',
                                 minute: '2-digit',
                               })}
@@ -1032,7 +1027,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
 
                   <button
                     type="button"
-                    onClick={() => useCurrentLocationForBranch('branch1')}
+                    onClick={() => captureCurrentLocationForBranch('branch1')}
                     className="btn btn-secondary btn-sm"
                     style={{ fontSize: '0.8rem', color: '#059669', borderColor: '#a7f3d0' }}
                   >
@@ -1118,7 +1113,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
 
                   <button
                     type="button"
-                    onClick={() => useCurrentLocationForBranch('branch2')}
+                    onClick={() => captureCurrentLocationForBranch('branch2')}
                     className="btn btn-secondary btn-sm"
                     style={{ fontSize: '0.8rem', color: '#4f46e5', borderColor: '#c7d2fe' }}
                   >
@@ -1356,7 +1351,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                     </td>
                     <td>
                       <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px' }}>
-                        {u.password || '••••••'}
+                        كلمة مرور محمية
                       </code>
                     </td>
                     <td>{u.phone || '--'}</td>
@@ -1373,7 +1368,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                         {u.role !== 'admin' && (
                           <>
                             <button
-                              onClick={() => copyCredentials(u.username, u.password, u.id)}
+                              onClick={() => copyCredentials(u.username, u.id)}
                               className="btn btn-secondary btn-sm"
                               title="نسخ بيانات الدخول لإرسالها بالواتساب"
                               style={{ padding: '4px 8px' }}
@@ -1386,7 +1381,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                               onClick={() => handleDeleteUser(u.id, u.name)}
                               className="btn btn-danger btn-sm"
                               style={{ padding: '4px 8px' }}
-                              title="حذف الموظف"
+                              title="تعطيل الموظف مع الاحتفاظ بالسجلات"
                             >
                               <Trash2 size={14} />
                             </button>

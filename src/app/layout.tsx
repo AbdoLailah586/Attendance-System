@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import 'leaflet/dist/leaflet.css';
+import AppInstall from '@/components/AppInstall';
 
 export const metadata: Metadata = {
   title: 'نظام الحضور والانصراف الذكي | تتبع الفروع والموظفين',
@@ -15,8 +17,6 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
   themeColor: '#ffffff',
 };
 
@@ -35,7 +35,7 @@ export default function RootLayout({
           crossOrigin=""
         />
       </head>
-      <body>{children}</body>
+      <body>{children}<div style={{position:'fixed',bottom:16,left:16,zIndex:1100}}><AppInstall /></div></body>
     </html>
   );
 }

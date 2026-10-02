@@ -1,16 +1,17 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Shield, User, KeyRound, Lock, AlertCircle, CheckCircle, Store, Smartphone } from 'lucide-react';
+import { Shield, User, Lock, AlertCircle, Store } from 'lucide-react';
+import type { AppUser } from '@/lib/types';
 
 interface LoginScreenProps {
-  onLoginSuccess: (user: any) => void;
+  onLoginSuccess: (user: AppUser) => void;
 }
 
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [roleTab, setRoleTab] = useState<'admin' | 'employee'>('employee');
-  const [username, setUsername] = useState('emp1');
-  const [password, setPassword] = useState('123456');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -18,11 +19,11 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     setRoleTab(tab);
     setError(null);
     if (tab === 'admin') {
-      setUsername('admin');
-      setPassword('admin123');
+      setUsername('');
+      setPassword('');
     } else {
-      setUsername('emp1');
-      setPassword('123456');
+      setUsername('');
+      setPassword('');
     }
   };
 
@@ -44,8 +45,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       }
 
       onLoginSuccess(data.user);
-    } catch (err: any) {
-      setError(err.message || 'حدث خطأ في الاتصال');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'حدث خطأ في الاتصال');
     } finally {
       setLoading(false);
     }
@@ -250,12 +251,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               borderColor: roleTab === 'admin' ? '#2563eb' : '#059669',
             }}
           >
-            {loading ? 'جاري التحقق...' : roleTab === 'admin' ? 'دخول لوحة تحكم المدير' : 'تسجيل الدخول وبدء التتبع'}
+            {loading ? 'جاري التحقق...' : roleTab === 'admin' ? 'دخول لوحة تحكم المدير' : 'تسجيل الدخول'}
           </button>
         </form>
 
         {/* Quick Demo Switcher */}
-        <div
+        {process.env.NEXT_PUBLIC_ENABLE_DEMO === 'true' && <div
           style={{
             marginTop: '28px',
             paddingTop: '20px',
@@ -349,7 +350,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               <span style={{ fontSize: '0.75rem', color: '#64748b' }}>تعيين ↵</span>
             </button>
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );

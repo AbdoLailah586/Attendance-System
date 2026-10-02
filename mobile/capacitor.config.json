@@ -1,0 +1,5 @@
+{
+  "appId": "com.joestore.attendance", "appName": "حضور جو ستور", "webDir": "dist",
+  "ios": {"contentInset":"automatic"},
+  "android": {"allowMixedContent":false}
+}

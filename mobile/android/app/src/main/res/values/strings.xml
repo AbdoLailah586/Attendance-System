@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">حضور جو ستور</string>
+    <string name="title_activity_main">حضور جو ستور</string>
+    <string name="package_name">com.joestore.attendance</string>
+    <string name="custom_url_scheme">com.joestore.attendance</string>
+</resources>

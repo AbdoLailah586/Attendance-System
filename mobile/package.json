@@ -1,0 +1,6 @@
+{
+  "name": "attendance-mobile", "version": "1.0.0", "private": true, "type": "module",
+  "scripts": {"build":"vite build", "sync":"npm run build && cap sync", "android":"cap open android", "ios":"cap open ios"},
+  "dependencies": {"@capacitor/core":"8.5.2", "@capacitor/android":"8.5.2", "@capacitor/ios":"8.5.2"},
+  "devDependencies": {"@capacitor/cli":"8.5.2", "vite":"^7.3.1"}
+}

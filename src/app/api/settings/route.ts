@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
-import { getSessionFromRequest } from '@/lib/auth';
+import { getActiveSession } from '@/lib/auth';
+import { loadSettings } from '@/lib/schema';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const res = await query('SELECT * FROM settings WHERE id = $1', ['main']);
-    if (res.rows.length === 0) {
-      return NextResponse.json({ error: 'Settings not found' }, { status: 404 });
-    }
-    return NextResponse.json({ settings: res.rows[0] });
+    if (!await getActiveSession(req)) return NextResponse.json({error:'غير مصرح'},{status:401});
+    return NextResponse.json({settings:await loadSettings()});
   } catch (err: unknown) {
     console.error('Settings GET error:', err);
     return NextResponse.json({ error: 'Failed to fetch settings' }, { status: 500 });
@@ -17,12 +15,21 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   try {
-    const session = getSessionFromRequest(req);
+    const session = await getActiveSession(req);
     if (!session || session.role !== 'admin') {
       return NextResponse.json({ error: 'صلاحيات المدير مطلوبة لتعديل الإعدادات' }, { status: 403 });
     }
 
     const body = await req.json();
+    for (const [key,value] of Object.entries(body)) {
+      if (value == null) continue;
+      if (/^branch[12]_(lat|lng|radius)$/.test(key) && (typeof value!=='number'||!Number.isFinite(value))) return NextResponse.json({error:'إحداثيات الفرع غير صالحة'},{status:400});
+      if (key.endsWith('_lat') && Math.abs(Number(value))>90 || key.endsWith('_lng') && Math.abs(Number(value))>180 || key.endsWith('_radius') && (!Number.isInteger(value)||Number(value)<10||Number(value)>5000)) return NextResponse.json({error:'إحداثيات الفرع أو نطاقه غير صالح'},{status:400});
+      if (key.endsWith('_name') && (typeof value!=='string'||!value.trim()||value.length>100)) return NextResponse.json({error:'اسم الفرع غير صالح'},{status:400});
+      if (['shift_start_time','shift_end_time'].includes(key) && (typeof value!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(value))) return NextResponse.json({error:'موعد الشيفت غير صالح'},{status:400});
+      if (key==='grace_period_mins' && (!Number.isInteger(value)||Number(value)<0||Number(value)>180) || key==='ping_interval_secs' && (!Number.isInteger(value)||Number(value)<15||Number(value)>300)) return NextResponse.json({error:'فترة السماح أو التحديث غير صالحة'},{status:400});
+    }
+    await loadSettings();
     const {
       branch1_name,
       branch1_lat,
@@ -71,10 +78,14 @@ export async function PUT(req: NextRequest) {
       ]
     );
 
+    for (const id of ['branch1','branch2']) {
+      const s=res.rows[0];
+      await query('UPDATE branches SET name=$1,lat=$2,lng=$3,radius=$4 WHERE id=$5', [s[`${id}_name`],s[`${id}_lat`],s[`${id}_lng`],s[`${id}_radius`],id]);
+    }
     return NextResponse.json({
       success: true,
       message: 'تم حفظ إعدادات الفروع والشيفتات بنجاح',
-      settings: res.rows[0],
+      settings: await loadSettings(),
     });
   } catch (err: unknown) {
     console.error('Settings PUT error:', err);

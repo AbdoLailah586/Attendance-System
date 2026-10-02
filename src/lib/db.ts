@@ -13,7 +13,8 @@ export function getPool(): Pool {
       ssl: {
         rejectUnauthorized: false,
       },
-      max: 20,
+      max: 5,
+      allowExitOnIdle: true,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
     });

@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { User, LogOut, Shield, MapPin, Store } from 'lucide-react';
+import { User, LogOut, Shield, Store } from 'lucide-react';
 
 interface NavbarProps {
   user: {
@@ -15,7 +15,7 @@ interface NavbarProps {
   branch2Name?: string;
 }
 
-export default function Navbar({ user, onLogout, branch1Name, branch2Name }: NavbarProps) {
+export default function Navbar({ user, onLogout }: NavbarProps) {
   return (
     <header
       style={{

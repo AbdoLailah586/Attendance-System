@@ -1,7 +1,11 @@
 import crypto from 'crypto';
 import { NextRequest } from 'next/server';
+import { query } from './db';
 
-const SECRET_KEY = process.env.JWT_SECRET || 'attendance-system-secret-key-2026-secure';
+function secretKey() {
+  if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET must be configured');
+  return process.env.JWT_SECRET;
+}
 
 export interface UserSession {
   id: number;
@@ -23,7 +27,7 @@ export function createToken(payload: UserSession): string {
   ).toString('base64url');
 
   const signature = crypto
-    .createHmac('sha256', SECRET_KEY)
+    .createHmac('sha256', secretKey())
     .update(`${header}.${body}`)
     .digest('base64url');
 
@@ -37,15 +41,16 @@ export function verifyToken(token: string): UserSession | null {
 
     const [header, body, signature] = parts;
     const expectedSig = crypto
-      .createHmac('sha256', SECRET_KEY)
+      .createHmac('sha256', secretKey())
       .update(`${header}.${body}`)
       .digest('base64url');
 
-    if (signature !== expectedSig) return null;
+    const supplied = Buffer.from(signature), expected = Buffer.from(expectedSig);
+    if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
 
     const data = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8'));
     const now = Math.floor(Date.now() / 1000);
-    if (data.exp && data.exp < now) return null;
+    if (!Number.isInteger(data.exp) || data.exp <= now || !Number.isInteger(data.id) || !['admin', 'employee'].includes(data.role)) return null;
 
     return {
       id: data.id,
@@ -56,6 +61,13 @@ export function verifyToken(token: string): UserSession | null {
   } catch {
     return null;
   }
+}
+
+export async function getActiveSession(req: NextRequest): Promise<UserSession | null> {
+  const session = getSessionFromRequest(req);
+  if (!session) return null;
+  const result = await query('SELECT id, username, name, role FROM users WHERE id=$1 AND is_active=TRUE', [session.id]);
+  return result.rows[0] || null;
 }
 
 export function getSessionFromRequest(req: NextRequest): UserSession | null {

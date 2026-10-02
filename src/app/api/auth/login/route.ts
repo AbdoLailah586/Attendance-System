@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { createToken } from '@/lib/auth';
+import { checkPassword, hashPassword } from '@/lib/password';
 
 export async function POST(req: NextRequest) {
   try {
     const { username, password } = await req.json();
 
-    if (!username || !password) {
+    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password || username.length > 100 || password.length > 200) {
       return NextResponse.json(
         { error: 'يرجى إدخال اسم المستخدم وكلمة المرور' },
         { status: 400 }
@@ -14,7 +15,7 @@ export async function POST(req: NextRequest) {
     }
 
     const res = await query(
-      'SELECT id, username, password, name, phone, role, is_active FROM users WHERE username = $1',
+      'SELECT id, username, password, name, phone, role, shift_start, shift_end, is_active FROM users WHERE username = $1',
       [username.trim()]
     );
 
@@ -35,18 +36,22 @@ export async function POST(req: NextRequest) {
     }
 
     // In production we compare hashed password or exact match
-    if (user.password !== password.trim()) {
+    if (!checkPassword(password, user.password)) {
       return NextResponse.json(
         { error: 'اسم المستخدم أو كلمة المرور غير صحيحة' },
         { status: 401 }
       );
     }
 
+    if (!user.password.startsWith('scrypt:')) await query('UPDATE users SET password=$1 WHERE id=$2 AND password=$3', [hashPassword(password), user.id, user.password]);
+
     const sessionPayload = {
       id: user.id,
       username: user.username,
       name: user.name,
       role: user.role as 'admin' | 'employee',
+      shift_start: user.shift_start,
+      shift_end: user.shift_end,
     };
 
     const token = createToken(sessionPayload);
