@@ -15,8 +15,10 @@ const adminCredentials={username:process.env.QA_ADMIN_USERNAME,password:process.
 if(!adminCredentials.username||!adminCredentials.password)throw new Error('Set QA_ADMIN_USERNAME and QA_ADMIN_PASSWORD. Credentials are never written to the report.');
 let testId;
 let adminToken;
+let completed=false;
+let deployedCommit;
 try {
-  const health=await call('/api/health');assert.equal(health.status,200);assert.equal(health.body.version,'attendance-mobile-v2');pass('Deployed release and database health');
+  const health=await call('/api/health');assert.equal(health.status,200);assert.equal(health.body.version,'attendance-mobile-v2');deployedCommit=health.body.commit;pass('Deployed release and database health');
   const anonymous=await call('/api/attendance/report');assert.equal(anonymous.status,401);pass('Anonymous report access denied');
   const login=await call('/api/auth/login',{method:'POST',data:adminCredentials});assert.equal(login.status,200);adminToken=login.body.token;
   const settingsResult=await call('/api/settings',{token:adminToken});assert.equal(settingsResult.status,200);const settings=settingsResult.body.settings;assert.ok(settings.branches.length>=2);pass('Admin login and branch settings');
@@ -60,8 +62,8 @@ try {
     assert.equal((await call('/api/attendance/ping',{method:'POST',token,data:{events:night}})).status,200);
     const nightReport=(await call(`/api/attendance/report?date=${nightDay}`,{token})).body.reports[0];assert.equal(nightReport.summary.totalMinutes,3);assert.equal(nightReport.summary.unknownMinutes,0);assert.equal(nightReport.onDuty,false);assert.equal(nightReport.lastDeparture,night[3].recorded_at);pass('Overnight shift crosses midnight without losing minutes; GPS-free clock-out');
     assert.equal((await call('/api/users',{method:'PUT',token:adminToken,data:{id:testId,shift_start:'10:00',shift_end:'10:08'}})).status,200);
-    const gapDay=new Date(Date.parse(day+'T12:00:00Z')-86400000).toISOString().slice(0,10);
-    const gapStart=start-86400000;
+    const gapDay=new Date(Date.parse(day+'T12:00:00Z')-3*86400000).toISOString().slice(0,10);
+    const gapStart=start-3*86400000;
     const gap=[0,10,11].map((minute,i)=>({client_event_id:randomUUID(),recorded_at:new Date(gapStart+minute*60000).toISOString(),event_type:i===0?'clock_in':i===2?'clock_out':'ping',lat:b1.lat,lng:b1.lng,accuracy:3}));
     assert.equal((await call('/api/attendance/ping',{method:'POST',token,data:{events:gap}})).status,200);
     const gapReport=(await call(`/api/attendance/report?date=${gapDay}`,{token})).body.reports[0];const cap=Math.max(3,settings.ping_interval_secs/20);assert.equal(gapReport.summary.totalMinutes,cap+1);assert.equal(gapReport.summary.unknownMinutes,10-cap);pass('Missing GPS samples appear as gaps and are excluded from confirmed work');
@@ -70,12 +72,13 @@ try {
     assert.equal((await call('/api/attendance/ping',{method:'POST',token,data:{client_event_id:randomUUID(),recorded_at:new Date(gapStart+13*60000).toISOString(),event_type:'clock_out',lat:null,lng:null,accuracy:null}})).status,200);pass('Uncertain GPS is flagged instead of proving branch presence');
     const restored=(await call('/api/settings',{token:adminToken})).body.settings;assert.equal(restored.branch1_lat,settings.branch1_lat);assert.equal(restored.branch2_lat,settings.branch2_lat);assert.equal(restored.grace_period_mins,settings.grace_period_mins);pass('Production branch locations and attendance rules were preserved during QA');
   }
+  completed=true;
 } finally {
   if(testId&&adminToken) {
     const disabled=await call(`/api/users?id=${testId}`,{method:'DELETE',token:adminToken});assert.equal(disabled.status,200);
     const users=await call('/api/users',{token:adminToken});assert.equal(users.body.users.find(u=>u.id===testId).is_active,false);pass('QA account deactivated; audit history retained');
   }
   await mkdir('artifacts',{recursive:true});
-  await writeFile('artifacts/production-verification.json',JSON.stringify({origin,runAt:new Date().toISOString(),testUserId:testId||null,checks},null,2));
+  await writeFile('artifacts/production-verification.json',JSON.stringify({origin,runAt:new Date().toISOString(),deployedCommit,completed,testUserId:testId||null,checks},null,2));
 }
 console.log(`${checks.length} checks passed against ${origin}`);

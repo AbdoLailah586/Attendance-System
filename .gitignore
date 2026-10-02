@@ -42,3 +42,4 @@ next-env.d.ts
 .tools/
 artifacts/*.apk
 artifacts/ios-simulator/
+artifacts/*.jpg

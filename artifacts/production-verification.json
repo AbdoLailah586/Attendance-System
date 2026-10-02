@@ -1,7 +1,9 @@
 {
   "origin": "https://attendance-system-joe-2026.vercel.app",
-  "runAt": "2026-10-02T16:31:32.742Z",
-  "testUserId": 7,
+  "runAt": "2026-10-02T16:52:58.269Z",
+  "deployedCommit": "a051976d3dd65b34581b545d128f7c21e9db5e80",
+  "completed": true,
+  "testUserId": 9,
   "checks": [
     "Deployed release and database health",
     "Anonymous report access denied",
@@ -9,12 +11,18 @@
     "Password data excluded from API",
     "Employee cannot read staff radar/logs or edit branches",
     "Invalid GPS rejected",
+    "Queued events cannot be uploaded under a different employee account",
     "Future timestamps rejected",
     "Offline batch accepts original timestamps and out-of-order delivery",
     "Retry acknowledges duplicates without inserting them",
     "Cairo report: 7 minutes presence, 2 outside, 1 overtime; employee isolation",
     "Admin sees event time separately from receipt time",
     "Destructive demo generator disabled",
+    "Invalid dates, settings and null event payloads rejected",
+    "Overnight shift crosses midnight without losing minutes; GPS-free clock-out",
+    "Missing GPS samples appear as gaps and are excluded from confirmed work",
+    "Uncertain GPS is flagged instead of proving branch presence",
+    "Production branch locations and attendance rules were preserved during QA",
     "QA account deactivated; audit history retained"
   ]
 }
