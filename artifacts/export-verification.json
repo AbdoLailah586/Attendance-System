@@ -1,0 +1,12 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "commit": "5abbf468d98a576c140aa3d82af991e40a39e618",
+  "completed": true,
+  "checks": [
+    "Anonymous CSV export blocked",
+    "Monthly summary CSV is a real authenticated production download",
+    "Monthly day CSV includes 31 dated rows and both branches",
+    "Employee CSV export remains limited to own attendance"
+  ],
+  "runAt": "2026-10-02T17:34:37.747Z"
+}

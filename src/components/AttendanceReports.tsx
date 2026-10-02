@@ -27,9 +27,9 @@ export default function AttendanceReports({users,refreshKey}:{users:AppUser[];re
     <div className="card report-controls"><h3>تقارير الحضور والغياب</h3><p className="muted">تقارير فعلية بتوقيت القاهرة، مع تفاصيل كل يوم وكل فرع.</p>
       <div className="report-filters">
         <label>نوع التقرير<select className="form-input" value={mode} onChange={e=>setMode(e.target.value as ReportMode)}><option value="daily">يومي</option><option value="weekly">أسبوعي</option><option value="monthly">شهري حسب دورة الموظف</option><option value="custom">فترة مخصصة</option></select></label>
-        {(mode==='daily'||mode==='monthly')&&<label>{mode==='daily'?'تاريخ اليوم':'تاريخ داخل دورة الشهر'}<input className="form-input" type="date" value={date} onChange={e=>setDate(e.target.value)}/></label>}
-        {(mode==='weekly'||mode==='custom')&&<label>من تاريخ<input className="form-input" type="date" value={start} onChange={e=>setStart(e.target.value)}/></label>}
-        {mode==='custom'&&<label>إلى تاريخ<input className="form-input" type="date" value={end} onChange={e=>setEnd(e.target.value)}/></label>}
+        {(mode==='daily'||mode==='monthly')&&<label>{mode==='daily'?'تاريخ اليوم':'تاريخ داخل دورة الشهر'}<input className="form-input" type="date" value={date} onInput={e=>setDate(e.currentTarget.value)} onChange={e=>setDate(e.target.value)}/></label>}
+        {(mode==='weekly'||mode==='custom')&&<label>من تاريخ<input className="form-input" type="date" value={start} onInput={e=>setStart(e.currentTarget.value)} onChange={e=>setStart(e.target.value)}/></label>}
+        {mode==='custom'&&<label>إلى تاريخ<input className="form-input" type="date" value={end} onInput={e=>setEnd(e.currentTarget.value)} onChange={e=>setEnd(e.target.value)}/></label>}
         <label>الموظف<select className="form-input" value={userId} onChange={e=>setUserId(e.target.value)}><option value="all">كل الموظفين</option>{users.filter(u=>u.role==='employee'||reports.some(r=>r.user.id===u.id)).map(u=><option key={u.id} value={u.id}>{u.name}{u.is_active===false?' (معطّل)':''}</option>)}</select></label>
       </div>
       {mode==='weekly'&&<p className="muted">أسبوع من {start} إلى {/^\d{4}-\d{2}-\d{2}$/.test(start)?addDays(start,6):'—'} شاملًا.</p>}
