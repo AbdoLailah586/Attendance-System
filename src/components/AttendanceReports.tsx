@@ -6,11 +6,6 @@ import type { AppUser } from '@/lib/types';
 
 const labels:Record<string,string>={present:'حاضر',absent:'غائب',off:'راحة أسبوعية',pending:'الشيفت لم ينتهِ',upcoming:'لم يبدأ الشيفت',unverified:'حضور غير مؤكد',untracked:'خارج فترة المتابعة'};
 function clock(value:string|null){return value?new Date(value).toLocaleTimeString('ar-EG',{timeZone:'Africa/Cairo',hour:'2-digit',minute:'2-digit'}):'—';}
-function csvFile(name:string,rows:unknown[][]){
-  const quote=(v:unknown)=>'"'+String(v??'').replace(/^[=+@-]/,"'$&").replaceAll('"','""')+'"';
-  const url=URL.createObjectURL(new Blob(['\uFEFF'+rows.map(r=>r.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));
-  const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);
-}
 export default function AttendanceReports({users,refreshKey}:{users:AppUser[];refreshKey:number}){
   const [mode,setMode]=useState<ReportMode>('daily'),[date,setDate]=useState(localDate),[start,setStart]=useState(localDate),[end,setEnd]=useState(localDate),[userId,setUserId]=useState('all');
   const [reports,setReports]=useState<PeriodReport[]>([]),[loading,setLoading]=useState(true),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[generatedAt,setGeneratedAt]=useState(''),[resetAt,setResetAt]=useState<string|null>(null);
@@ -24,11 +19,10 @@ export default function AttendanceReports({users,refreshKey}:{users:AppUser[];re
     }).catch(e=>{if(!controller.signal.aborted){setError(e.message);setReports([]);}}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});
     return()=>controller.abort();
   },[mode,date,start,end,userId,refresh,refreshKey]);
-  const exportSummary=()=>{
-    const branches=[...new Map(reports.flatMap(r=>r.summary.branches.map(b=>[b.id,b.name] as const))).entries()];
-    csvFile(`attendance-${mode}-${date}.csv`,[['الموظف','اسم الدخول','من','إلى','أيام العمل حتى الآن','أيام الحضور','أيام الغياب','أيام الراحة','أيام التأخير','التأخير بالدقائق','حضور بالدقائق',...branches.map(([,name])=>name+' بالدقائق'),'خلال الشيفت','إضافي','خارج الفروع','فجوات GPS','مرات الخروج','انصراف مبكر'],...reports.map(r=>[r.user.name,r.user.username,r.start,r.end,r.summary.scheduledDays,r.summary.presentDays,r.summary.absentDays,r.summary.offDays,r.summary.lateDays,r.summary.late.minutes,r.summary.total.minutes,...branches.map(([id])=>r.summary.branches.find(b=>b.id===id)?.minutes||0),r.summary.regular.minutes,r.summary.overtime.minutes,r.summary.outside.minutes,r.summary.unknown.minutes,r.summary.exitCount,r.summary.earlyDeparture.minutes])]);
+  const download=(details:boolean)=>{
+    const params=new URLSearchParams({mode,date,start,end,details:String(details)});if(userId!=='all')params.set('userId',userId);
+    const link=document.createElement('a');link.href='/api/attendance/export?'+params;link.download='attendance.csv';document.body.appendChild(link);link.click();link.remove();
   };
-  const exportDays=()=>csvFile(`attendance-days-${mode}-${date}.csv`,[['الموظف','اسم الدخول','التاريخ','الحالة','بداية الشيفت','نهاية الشيفت','أول وصول','آخر انصراف','حضور بالدقائق','إضافي','خارج الفروع','فجوات GPS','دقائق التأخير','مرات الخروج'],...reports.flatMap(r=>r.days.map(d=>[r.user.name,r.user.username,d.date,labels[d.status],d.policy.shift_start,d.policy.shift_end,d.firstArrival,d.lastDeparture,d.summary.totalMinutes,d.summary.overtimeMinutes,d.summary.outsideMinutes,d.summary.unknownMinutes,d.lateMinutes,d.exitCount]))]);
   return <section className="attendance-reports">
     <div className="card report-controls"><h3>تقارير الحضور والغياب</h3><p className="muted">تقارير فعلية بتوقيت القاهرة، مع تفاصيل كل يوم وكل فرع.</p>
       <div className="report-filters">
@@ -40,7 +34,7 @@ export default function AttendanceReports({users,refreshKey}:{users:AppUser[];re
       </div>
       {mode==='weekly'&&<p className="muted">أسبوع من {start} إلى {/^\d{4}-\d{2}-\d{2}$/.test(start)?addDays(start,6):'—'} شاملًا.</p>}
       {mode==='monthly'&&<p className="muted">بداية الدورة تُحدد في بروفايل كل موظف؛ فترة كل موظف موضحة في تقريره. يوم 29–31 يُستخدم فيه آخر يوم متاح بالشهر القصير.</p>}
-      <div className="report-actions"><button className="btn btn-secondary" onClick={()=>setRefresh(n=>n+1)}>تحديث التقرير</button><button className="btn btn-primary" disabled={loading||!reports.length} onClick={exportSummary}>تصدير ملخص CSV</button><button className="btn btn-secondary" disabled={loading||!reports.length} onClick={exportDays}>تصدير تفاصيل الأيام</button></div>
+      <div className="report-actions"><button className="btn btn-secondary" onClick={()=>setRefresh(n=>n+1)}>تحديث التقرير</button><button className="btn btn-primary" disabled={loading||!reports.length} onClick={()=>download(false)}>تصدير ملخص CSV</button><button className="btn btn-secondary" disabled={loading||!reports.length} onClick={()=>download(true)}>تصدير تفاصيل الأيام</button></div>
       <p className="muted">الغياب يُحسب بعد انتهاء الشيفت في أيام العمل المحددة. الأيام القادمة وما قبل بداية المتابعة لا تُحسب غيابًا. قراءات GPS غير المؤكدة وفجوات التتبع ظاهرة للمراجعة.</p>
       {resetAt&&<p className="muted">بداية السجل الفعلي بعد التصفير: {new Date(resetAt).toLocaleString('ar-EG',{timeZone:'Africa/Cairo'})}</p>}
       {generatedAt&&!loading&&<small>آخر تحديث: {new Date(generatedAt).toLocaleString('ar-EG',{timeZone:'Africa/Cairo'})}</small>}

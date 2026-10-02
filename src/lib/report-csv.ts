@@ -1,0 +1,9 @@
+import type { PeriodReport } from './period-report';
+export function reportCsv(reports:PeriodReport[],details=false){
+  const branches=[...new Map(reports.flatMap(r=>r.summary.branches.map(b=>[b.id,b.name] as const))).entries()];
+  const rows:unknown[][]=details?
+    [['الموظف','اسم الدخول','التاريخ','الحالة','بداية الشيفت','نهاية الشيفت','أول وصول','آخر انصراف','حضور بالدقائق',...branches.map(([,name])=>name+' بالدقائق'),'إضافي','خارج الفروع','فجوات GPS','دقائق التأخير','مرات الخروج'],...reports.flatMap(r=>r.days.map(d=>[r.user.name,r.user.username,d.date,({present:'حاضر',absent:'غائب',off:'راحة أسبوعية',pending:'الشيفت لم ينتهِ',upcoming:'لم يبدأ الشيفت',unverified:'حضور غير مؤكد',untracked:'خارج فترة المتابعة'} as Record<string,string>)[d.status],d.policy.shift_start,d.policy.shift_end,d.firstArrival,d.lastDeparture,d.summary.totalMinutes,...branches.map(([id])=>d.summary.branches.find(b=>b.id===id)?.minutes||0),d.summary.overtimeMinutes,d.summary.outsideMinutes,d.summary.unknownMinutes,d.lateMinutes,d.exitCount]))]:
+    [['الموظف','اسم الدخول','من','إلى','أيام العمل حتى الآن','أيام الحضور','أيام الغياب','أيام الراحة','أيام التأخير','التأخير بالدقائق','حضور بالدقائق',...branches.map(([,name])=>name+' بالدقائق'),'خلال الشيفت','إضافي','خارج الفروع','فجوات GPS','مرات الخروج','انصراف مبكر'],...reports.map(r=>[r.user.name,r.user.username,r.start,r.end,r.summary.scheduledDays,r.summary.presentDays,r.summary.absentDays,r.summary.offDays,r.summary.lateDays,r.summary.late.minutes,r.summary.total.minutes,...branches.map(([id])=>r.summary.branches.find(b=>b.id===id)?.minutes||0),r.summary.regular.minutes,r.summary.overtime.minutes,r.summary.outside.minutes,r.summary.unknown.minutes,r.summary.exitCount,r.summary.earlyDeparture.minutes])];
+  const quote=(value:unknown)=>'"'+String(value??'').replace(/^(\s*)([=+@-])/,"'$1$2").replaceAll('"','""')+'"';
+  return '\uFEFF'+rows.map(row=>row.map(quote).join(',')).join('\r\n');
+}

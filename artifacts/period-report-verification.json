@@ -1,0 +1,28 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "commit": "754e5eab33dd8be93b94aa41baf651c9013a3e71",
+  "runAt": "2026-10-02T17:21:14.809Z",
+  "completed": true,
+  "testUserId": 10,
+  "checks": [
+    "Production database and deployed release healthy",
+    "Anonymous period reports rejected",
+    "Daily real event aggregation splits primary/wholesale branches, outside and overtime",
+    "Custom inclusive date range sums two days without duplicate minutes",
+    "Weekly range has seven days and future days are not absences",
+    "Employee month cycle starts on day 15 and ends on next day 14",
+    "Month days 28–31 clamp correctly in February with no overlap",
+    "Per-employee weekly rest days do not count as absence",
+    "Completed scheduled day without events counts as absence",
+    "Days before employee attendance start excluded from absence",
+    "Profile editing stores effective dated rules while preserving previous days",
+    "Employee period reports restricted to own account",
+    "Employees cannot edit account profiles or permissions",
+    "Role changes immediately change permissions on existing sessions",
+    "Last active administrator cannot be disabled",
+    "Invalid ranges, cycle days and work weekdays rejected",
+    "Demo generator remains disabled",
+    "Actual branch locations and 20 metre geofences preserved",
+    "Isolated QA account disabled after production checks"
+  ]
+}

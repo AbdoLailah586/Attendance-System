@@ -7,6 +7,17 @@ async function call(path,{method='GET',token,data}={}){
   return {status:r.status,body:await r.json()};
 }
 const pass=name=>{checks.push(name);console.log('PASS '+name);};
+if(!process.argv.includes('--write-test-events')){
+  const login=await call('/api/auth/login',{method:'POST',data:{username:process.env.QA_ADMIN_USERNAME,password:process.env.QA_ADMIN_PASSWORD}});
+  assert.equal(login.status,200);
+  for(const mode of ['daily','weekly','monthly','custom']){
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const r=await call(`/api/attendance/period-report?mode=${mode}&date=${today}&start=${today}&end=${today}`,{token:login.body.token});
+    assert.equal(r.status,200);pass('Read-only production '+mode+' report');
+  }
+  console.log('No test accounts or attendance events were generated.');process.exit(0);
+}
+if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL required for removing isolated QA fixtures after the write suite');
 const add=(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
 const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const day=add(today,-2),next=add(today,-1);
@@ -21,6 +32,7 @@ try{
   assert.equal((await call('/api/attendance/period-report')).status,401);pass('Anonymous period reports rejected');
   const login=await call('/api/auth/login',{method:'POST',data:{username:process.env.QA_ADMIN_USERNAME,password:process.env.QA_ADMIN_PASSWORD}});assert.equal(login.status,200);token=login.body.token;
   const settings=(await call('/api/settings',{token})).body.settings;
+  if(settings.attendance_reset_at)throw new Error('Historical write fixtures are disabled after the real attendance reset. Run the default read-only checks.');
   const username='qa_period_'+randomUUID().slice(0,8),password=randomBytes(18).toString('hex');
   const created=await call('/api/users',{method:'POST',token,data:{username,password,name:'QA · تقرير معزول',shift_start:'10:00',shift_end:'10:08',grace_period_mins:0,work_days:[0,1,2,3,4,5,6],cycle_start_day:15,attendance_start_date:add(today,-40)}});
   assert.equal(created.status,200);id=created.body.user.id;
@@ -58,7 +70,11 @@ try{
   const after=(await call('/api/settings',{token})).body.settings;assert.equal(after.branch1_lat,settings.branch1_lat);assert.equal(after.branch2_lat,settings.branch2_lat);assert.equal(after.branch1_radius,20);assert.equal(after.branch2_radius,20);pass('Actual branch locations and 20 metre geofences preserved');
   completed=true;
 }finally{
-  if(id&&token){assert.equal((await call(`/api/users?id=${id}`,{method:'DELETE',token})).status,200);pass('Isolated QA account disabled after production checks');}
+  if(id&&token){
+    assert.equal((await call(`/api/users?id=${id}`,{method:'DELETE',token})).status,200);
+    const {default:pg}=await import('pg');const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:false}});
+    try{const removed=await pool.query("DELETE FROM users WHERE id=$1 AND username ~ '^qa_period_' AND name LIKE 'QA%' AND role='employee' AND is_active=FALSE RETURNING id",[id]);assert.equal(removed.rowCount,1);pass('Isolated QA account and its synthetic events removed after production checks');}finally{await pool.end();}
+  }
   await mkdir('artifacts',{recursive:true});await writeFile('artifacts/period-report-verification.json',JSON.stringify({origin,commit,runAt:new Date().toISOString(),completed,testUserId:id,checks},null,2));
 }
 console.log(`${checks.length} production checks passed`);

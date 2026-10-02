@@ -1,0 +1,19 @@
+import assert from 'node:assert/strict';import{randomUUID}from'node:crypto';import{writeFile}from'node:fs/promises';
+const origin='https://attendance-system-joe-2026.vercel.app',checks=[];
+async function call(path,{method='GET',token,data}={}){const r=await fetch(origin+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`}:{ }),...(data!==undefined?{'Content-Type':'application/json'}:{})},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(30000)});return{status:r.status,body:await r.json()};}
+const pass=n=>{checks.push(n);console.log('PASS '+n);};
+const login=await call('/api/auth/login',{method:'POST',data:{username:process.env.QA_ADMIN_USERNAME,password:process.env.QA_ADMIN_PASSWORD}});assert.equal(login.status,200);const token=login.body.token;
+const settings=(await call('/api/settings',{token})).body.settings;assert.ok(settings.attendance_reset_at);pass('Production exposes persisted attendance reset timestamp');
+const users=(await call('/api/users',{token})).body.users;assert.ok(!users.some(u=>/^qa_(sync|period)_/.test(u.username)));assert.equal(users.filter(u=>u.username==='admin').length,1);assert.equal(users.filter(u=>/^emp[1-5]$/.test(u.username)).length,5);assert.ok(!users.some(u=>/^010(00000000|11112222|22223333|33334444|44445555|55556666)$/.test(u.phone||'')));pass('Owner and five employee accounts retained; QA accounts and placeholder phones removed');
+const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+for(const mode of ['daily','weekly','monthly','custom']){
+  const r=await call(`/api/attendance/period-report?mode=${mode}&date=${today}&start=2026-10-01&end=2026-10-31`,{token});assert.equal(r.status,200);assert.equal(r.body.reports.length,5);assert.ok(r.body.reports.every(u=>u.summary.total.minutes===0&&u.summary.presentDays===0&&u.summary.absentDays===0&&u.days.every(d=>d.logCount===0)));pass(`${mode} report uses cleared real database with zero attendance and no fabricated historical absence`);
+}
+const logs=await call('/api/attendance/logs?date='+today,{token});assert.equal(logs.status,200);assert.equal(logs.body.logs.length,0);assert.equal(logs.body.total,0);pass('Production attendance event log is empty');
+const live=await call('/api/attendance/live',{token});assert.equal(live.status,200);assert.ok(live.body.employees.every(e=>e.summary.totalMinutes===0&&e.latestLog===null&&!e.onDuty));pass('Live employee counters and duty states reset to zero');
+const employee=await call('/api/auth/login',{method:'POST',data:{username:'emp1',password:process.env.QA_EMPLOYEE_PASSWORD}});assert.equal(employee.status,200);
+const b=settings.branches.find(b=>b.id==='branch1'),oldEvent={client_event_id:randomUUID(),recorded_at:new Date(Date.parse(settings.attendance_reset_at)-60000).toISOString(),event_type:'clock_in',lat:b.lat,lng:b.lng,accuracy:1};
+const replay=await call('/api/attendance/ping',{method:'POST',token:employee.body.token,data:oldEvent});assert.equal(replay.status,200);assert.equal(replay.body.acknowledged[0].discarded,true);assert.equal(replay.body.acknowledged[0].reason,'attendance_reset');
+assert.equal((await call('/api/attendance/logs?date='+today,{token})).body.total,0);pass('Pre-reset queued event acknowledged as discarded without restoring any record');
+assert.equal(b.lat,31.0530078);assert.equal(settings.branches.find(b=>b.id==='branch2').lat,31.053352);assert.ok(settings.branches.every(b=>b.radius===20));pass('Primary/wholesale coordinates and 20 metre radii remain unchanged');
+await writeFile('artifacts/reset-verification.json',JSON.stringify({origin,runAt:new Date().toISOString(),resetAt:settings.attendance_reset_at,completed:true,checks},null,2));console.log(`${checks.length} post-reset production checks passed`);

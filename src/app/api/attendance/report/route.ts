@@ -19,16 +19,18 @@ export async function GET(req: NextRequest) {
       LEFT JOIN LATERAL(SELECT * FROM employee_policies WHERE user_id=u.id AND effective_from<=$1::date ORDER BY effective_from DESC LIMIT 1)p ON TRUE
       WHERE u.role = 'employee' ${id ? 'AND u.id = $2' : ''} ORDER BY u.id`, id ? [day,id] : [day]);
     const reports = await Promise.all(users.rows.map(async user => {
-      const start = cairoTime(day);
-      const shift = shiftWindow(day, user.shift_start || settings.shift_start_time, user.shift_end || settings.shift_end_time);
       const overnight = (user.shift_end || settings.shift_end_time) <= (user.shift_start || settings.shift_start_time);
+      const requestedShift = shiftWindow(day, user.shift_start || settings.shift_start_time, user.shift_end || settings.shift_end_time);
+      const reportDay = !params.has('date') && overnight && new Date()<requestedShift.start ? new Date(Date.parse(day+'T12:00:00Z')-86400000).toISOString().slice(0,10) : day;
+      const start = cairoTime(reportDay);
+      const shift = shiftWindow(reportDay, user.shift_start || settings.shift_start_time, user.shift_end || settings.shift_end_time);
       const rangeStart = overnight ? shift.start : start;
-      const rangeEnd = overnight ? shiftWindow(nextDay(day), user.shift_start || settings.shift_start_time, user.shift_end || settings.shift_end_time).start : cairoTime(nextDay(day));
+      const rangeEnd = overnight ? shiftWindow(nextDay(reportDay), user.shift_start || settings.shift_start_time, user.shift_end || settings.shift_end_time).start : cairoTime(nextDay(reportDay));
     const result = await query<AttendanceLog>(`(SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp < $2 ORDER BY timestamp DESC, id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp < $2 AND event_type IN ('clock_in','clock_out') ORDER BY timestamp DESC,id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp >= $2 AND timestamp < $3)
         ORDER BY timestamp, id`, [user.id, rangeStart.toISOString(), rangeEnd.toISOString()]);
-      return { user, ...buildReport(user, result.rows, {...settings,grace_period_mins:user.grace_period_mins}, day, rangeStart, rangeEnd) };
+      return { user,date:reportDay, ...buildReport(user, result.rows, {...settings,grace_period_mins:user.grace_period_mins}, reportDay, rangeStart, rangeEnd) };
     }));
     return NextResponse.json({ date: day, timeZone: TIME_ZONE, settings, reports }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {

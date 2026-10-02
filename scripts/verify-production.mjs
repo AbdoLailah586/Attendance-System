@@ -25,6 +25,7 @@ try {
   const users=await call('/api/users',{token:adminToken});assert.equal(users.status,200);assert.ok(users.body.users.every(u=>!Object.hasOwn(u,'password')));pass('Password data excluded from API');
   if(!process.argv.includes('--write-test-events')) { const live=await call('/api/attendance/live',{token:adminToken});assert.equal(live.status,200);const logs=await call('/api/attendance/logs',{token:adminToken});assert.equal(logs.status,200);pass('Admin radar and logs'); }
   else {
+    if(settings.attendance_reset_at)throw new Error('Historical write fixtures are disabled after attendance reset. Use read-only production verification.');
     const username='qa_sync_'+randomUUID().slice(0,8);const password=randomBytes(18).toString('base64url');
     const created=await call('/api/users',{method:'POST',token:adminToken,data:{username,password,name:'QA · اختبار مزامنة معزول',shift_start:'10:00',shift_end:'10:08'}});assert.equal(created.status,200);testId=created.body.user.id;
     const employee=await call('/api/auth/login',{method:'POST',data:{username,password}});assert.equal(employee.status,200);const token=employee.body.token;

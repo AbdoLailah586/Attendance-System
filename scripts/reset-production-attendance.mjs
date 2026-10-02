@@ -31,7 +31,7 @@ try{
   receipt={origin,resetAt:reset,removedAttendanceRecords:removed,removedQAAccounts:qa,remainingRecords:Number((await client.query('SELECT count(*) FROM attendance_logs')).rows[0].count),backupSchema:'private_attendance_archive',logsTable,usersTable};
 }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();await pool.end();}
 const after=await(await fetch(origin+'/api/settings',{headers,cache:'no-store'})).json();
-if(Date.parse(after.settings.attendance_reset_at)!==Date.parse(receipt.resetAt))throw new Error('Reset timestamp not visible on production');
-if(after.settings.branch1_lat!==deployed.settings.branch1_lat||after.settings.branch2_lng!==deployed.settings.branch2_lng||after.settings.branch1_radius!==deployed.settings.branch1_radius||after.settings.branch2_radius!==deployed.settings.branch2_radius)throw new Error('Branch settings changed during reset');
 await mkdir('artifacts',{recursive:true});await writeFile('artifacts/attendance-reset.json',JSON.stringify(receipt,null,2));
+if(new Date(after.settings.attendance_reset_at).getTime()!==new Date(receipt.resetAt).getTime())throw new Error('Reset timestamp not visible on production');
+if(after.settings.branch1_lat!==deployed.settings.branch1_lat||after.settings.branch2_lng!==deployed.settings.branch2_lng||after.settings.branch1_radius!==deployed.settings.branch1_radius||after.settings.branch2_radius!==deployed.settings.branch2_radius)throw new Error('Branch settings changed during reset');
 console.log(JSON.stringify(receipt,null,2));

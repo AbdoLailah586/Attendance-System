@@ -1,0 +1,10 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "resetAt": "2026-10-02T17:21:35.351Z",
+  "removedAttendanceRecords": 490,
+  "removedQAAccounts": 4,
+  "remainingRecords": 0,
+  "backupSchema": "private_attendance_archive",
+  "logsTable": "logs_20261002172134786",
+  "usersTable": "qa_users_20261002172134786"
+}

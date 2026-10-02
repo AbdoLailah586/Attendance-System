@@ -1,0 +1,26 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "verifiedAt": "2026-10-02T16:56:41.7072184Z",
+  "branches": [
+    {
+      "id": "branch1",
+      "name": "الفرع الأساسي",
+      "lat": 31.0530078,
+      "lng": 31.4016798,
+      "radius": 20,
+      "is_active": true
+    },
+    {
+      "id": "branch2",
+      "name": "فرع الجملة",
+      "lat": 31.053352,
+      "lng": 31.401893,
+      "radius": 20,
+      "is_active": true
+    }
+  ],
+  "sources": [
+    "https://maps.app.goo.gl/zuqggb7LkzaryDXN6",
+    "https://maps.app.goo.gl/iucvty4H69qPPtTdA"
+  ]
+}

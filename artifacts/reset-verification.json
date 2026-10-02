@@ -1,0 +1,18 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "runAt": "2026-10-02T17:23:17.674Z",
+  "resetAt": "2026-10-02T17:21:35.351Z",
+  "completed": true,
+  "checks": [
+    "Production exposes persisted attendance reset timestamp",
+    "Owner and five employee accounts retained; QA accounts and placeholder phones removed",
+    "daily report uses cleared real database with zero attendance and no fabricated historical absence",
+    "weekly report uses cleared real database with zero attendance and no fabricated historical absence",
+    "monthly report uses cleared real database with zero attendance and no fabricated historical absence",
+    "custom report uses cleared real database with zero attendance and no fabricated historical absence",
+    "Production attendance event log is empty",
+    "Live employee counters and duty states reset to zero",
+    "Pre-reset queued event acknowledged as discarded without restoring any record",
+    "Primary/wholesale coordinates and 20 metre radii remain unchanged"
+  ]
+}

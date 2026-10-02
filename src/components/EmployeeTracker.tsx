@@ -29,7 +29,7 @@ export default function EmployeeTracker({ user }: Props) {
     const data = await response.json();
     const reset=data.settings?.attendance_reset_at;
     if(reset&&localStorage.getItem(`attendance-reset-${user.id}`)!==reset){
-      duty.current=false;setOnDuty(false);localStorage.setItem(storageKey,'false');
+      duty.current=Boolean(data.reports?.[0]?.onDuty);setOnDuty(duty.current);localStorage.setItem(storageKey,String(duty.current));
       localStorage.setItem(`attendance-reset-${user.id}`,reset);
       setPosition(null);setLastSaved(null);setMessage('الإدارة بدأت سجل حضور جديد؛ ابدأ الشيفت لتسجيل حضورك الفعلي');
     }
