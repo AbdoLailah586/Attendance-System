@@ -9,6 +9,12 @@ export async function GET(req:NextRequest){
   if((await getActiveSession(req))?.role!=='admin')return NextResponse.json({error:'صلاحيات المدير مطلوبة'},{status:403});
   try{
     await ensureAttendanceSchema();
+    const auditId=req.nextUrl.searchParams.get('scanId');
+    if(auditId){
+      if(!/^[1-9]\d*$/.test(auditId))return NextResponse.json({error:'قراءة غير صالحة'},{status:400});
+      const history=await query('SELECT a.*,u.name AS admin_name FROM nfc_review_audit a JOIN users u ON u.id=a.admin_id WHERE scan_id=$1 ORDER BY a.id',[auditId]);
+      return NextResponse.json({history:history.rows},{headers:{'Cache-Control':'private, no-store'}});
+    }
     const p=req.nextUrl.searchParams,page=Math.max(1,Number(p.get('page'))||1);
     if(!Number.isInteger(page)||page>100000)return NextResponse.json({error:'صفحة غير صالحة'},{status:400});
     const filter=p.get('review')==='true'?"AND s.status NOT IN ('accepted','duplicate_action','ignored','before_start')":'';

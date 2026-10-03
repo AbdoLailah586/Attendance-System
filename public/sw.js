@@ -1,5 +1,5 @@
 /* Cache the public app shell and static assets. Private APIs are never cached. */
-const CACHE = 'attendance-shell-v2';
+const CACHE = 'attendance-shell-v3-card';
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(['/', '/manifest.json', '/icon.svg'])));
 });

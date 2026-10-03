@@ -39,7 +39,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         if active { if allowed {resume()} else {pauseAtEnd()} }
     }
     private func pauseAtEnd(){
-        shiftStop?.cancel();prefs.set(false,forKey:"attendance-active");manager.stopUpdatingLocation();manager.stopMonitoringSignificantLocationChanges()
+        shiftStop?.cancel();prefs.set(false,forKey:"attendance-active");manager.stopUpdatingLocation();manager.stopMonitoringSignificantLocationChanges();if startCall != nil {failStart("انتهى وقت متابعة الشيفت")}
     }
     private func refreshSchedule(){
         guard !fetchingSchedule && !token().isEmpty else{return};fetchingSchedule=true
@@ -132,7 +132,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         switch manager.authorizationStatus {
         case .notDetermined: manager.requestWhenInUseAuthorization()
         case .authorizedWhenInUse: manager.requestAlwaysAuthorization()
-        case .authorizedAlways: manager.startUpdatingLocation()
+        case .authorizedAlways: resume()
         default: failStart("اسمح بالموقع دائمًا من إعدادات iPhone")
         }
     }
@@ -149,7 +149,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
     }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         if manager.authorizationStatus == .authorizedAlways {
-            if active { resume() } else if startCall != nil { manager.startUpdatingLocation() }
+            if active { resume() } else if startCall != nil { resume() }
         } else if manager.authorizationStatus == .authorizedWhenInUse && startCall != nil { manager.requestAlwaysAuthorization() }
         else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
             prefs.set("صلاحية الموقع متوقفة؛ توجد فجوة تتبع", forKey: "attendance-error")

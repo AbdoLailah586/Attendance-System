@@ -1,0 +1,31 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "commit": "cdfaffef7e0a142af3e7929ae90303c82e3af500",
+  "runAt": "2026-10-03T01:08:58.475Z",
+  "completed": true,
+  "checks": [
+    "Production deployed card attendance mode",
+    "Reader administration protected from employee and anonymous accounts",
+    "Branch devices have distinct keys and inventory never exposes credentials",
+    "Unique 125 kHz card assigned to employee; accidental duplicate assignment rejected",
+    "Arrival classified by employee window; delivery retries and additional taps never duplicate attendance",
+    "Card alone establishes arrival; missing checkout remains provisional rather than inventing departure",
+    "Invalid key and cross-device impersonation rejected",
+    "Malformed event and empty batch rejected",
+    "Unknown cards and untimed offline taps durably recorded for review",
+    "Mid-shift tap retained without being mistaken for checkout",
+    "Admin can change windows; overlaps route to review rather than guessing",
+    "Window bounds validated",
+    "Reviewed out-of-order card timestamps pair into the exact captured interval, including midnight crossing",
+    "GPS outside the finished shift is discarded on the production server",
+    "Mobile button cannot manufacture authoritative arrival",
+    "Tracking schedule stops at shift boundary and observed card checkout",
+    "In-shift GPS is accepted or stopped by already recorded checkout",
+    "GPS succeeds within scheduled shift while never establishing card attendance",
+    "Early card checkout ends GPS schedule and rejects subsequent location samples",
+    "Disabled reader cannot submit new scans",
+    "Key replacement invalidates previous credential",
+    "Authenticated CSV exports card source and missing-checkout state",
+    "Old offline taps cannot restore reset attendance"
+  ]
+}

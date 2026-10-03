@@ -45,3 +45,5 @@ artifacts/ios-simulator/
 artifacts/*.jpg
 firmware/**/.pio/
 firmware/**/include/config.h
+
+firmware/**/include/attendance-config.h
