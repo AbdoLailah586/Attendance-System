@@ -1,7 +1,7 @@
 {
   "origin": "https://attendance-system-joe-2026.vercel.app",
-  "commit": "cdfaffef7e0a142af3e7929ae90303c82e3af500",
-  "runAt": "2026-10-03T01:08:58.475Z",
+  "commit": "27078dba2abef67676d225180102f83b1a8eaff0",
+  "runAt": "2026-10-03T01:20:17.169Z",
   "completed": true,
   "checks": [
     "Production deployed card attendance mode",
@@ -16,6 +16,7 @@
     "Mid-shift tap retained without being mistaken for checkout",
     "Admin can change windows; overlaps route to review rather than guessing",
     "Window bounds validated",
+    "Card review preserves original values, correction reason and administrator in a protected audit trail",
     "Reviewed out-of-order card timestamps pair into the exact captured interval, including midnight crossing",
     "GPS outside the finished shift is discarded on the production server",
     "Mobile button cannot manufacture authoritative arrival",
