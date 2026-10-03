@@ -37,6 +37,42 @@ export function ensureAttendanceSchema() {
     INSERT INTO branches (id, name, lat, lng, radius)
     SELECT 'branch2', branch2_name, branch2_lat, branch2_lng, branch2_radius FROM settings WHERE id = 'main'
     ON CONFLICT DO NOTHING;
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS attendance_mode VARCHAR(20) NOT NULL DEFAULT 'nfc';
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS nfc_enabled_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'mobile';
+    ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS shift_day DATE;
+    ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS nfc_scan_id BIGINT;
+    CREATE UNIQUE INDEX IF NOT EXISTS nfc_shift_action ON attendance_logs(user_id,shift_day,event_type) WHERE source='nfc';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS nfc_in_before INTEGER NOT NULL DEFAULT 60;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS nfc_in_after INTEGER NOT NULL DEFAULT 120;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS nfc_out_before INTEGER NOT NULL DEFAULT 60;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS nfc_out_after INTEGER NOT NULL DEFAULT 180;
+    ALTER TABLE employee_policies ADD COLUMN IF NOT EXISTS nfc_in_before INTEGER NOT NULL DEFAULT 60;
+    ALTER TABLE employee_policies ADD COLUMN IF NOT EXISTS nfc_in_after INTEGER NOT NULL DEFAULT 120;
+    ALTER TABLE employee_policies ADD COLUMN IF NOT EXISTS nfc_out_before INTEGER NOT NULL DEFAULT 60;
+    ALTER TABLE employee_policies ADD COLUMN IF NOT EXISTS nfc_out_after INTEGER NOT NULL DEFAULT 180;
+    CREATE TABLE IF NOT EXISTS nfc_devices (
+      id UUID PRIMARY KEY, name VARCHAR(100) NOT NULL, branch_id VARCHAR(50) NOT NULL REFERENCES branches(id),
+      token_hash VARCHAR(64) NOT NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE, last_seen_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS nfc_cards (
+      id SERIAL PRIMARY KEY, uid VARCHAR(20) NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id),
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), revoked_at TIMESTAMPTZ
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS nfc_card_active ON nfc_cards(uid) WHERE revoked_at IS NULL;
+    CREATE TABLE IF NOT EXISTS nfc_scans (
+      id BIGSERIAL PRIMARY KEY, device_id UUID NOT NULL REFERENCES nfc_devices(id), event_id UUID NOT NULL,
+      card_uid VARCHAR(20) NOT NULL, user_id INTEGER REFERENCES users(id), branch_id VARCHAR(50) NOT NULL,
+      recorded_at TIMESTAMPTZ, received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), status VARCHAR(40) NOT NULL,
+      event_type VARCHAR(20), shift_day DATE, reviewed_by INTEGER REFERENCES users(id), review_note TEXT,
+      reviewed_at TIMESTAMPTZ, UNIQUE(device_id,event_id)
+    );
+    CREATE INDEX IF NOT EXISTS nfc_scans_received ON nfc_scans(received_at DESC);
+    CREATE TABLE IF NOT EXISTS nfc_review_audit (
+      id BIGSERIAL PRIMARY KEY, scan_id BIGINT NOT NULL REFERENCES nfc_scans(id), admin_id INTEGER NOT NULL REFERENCES users(id),
+      previous_data JSONB NOT NULL, new_data JSONB NOT NULL, note TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `).catch(error => { migration = undefined; throw error; });
   return migration;
 }

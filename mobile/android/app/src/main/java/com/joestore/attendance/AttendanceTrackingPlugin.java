@@ -29,7 +29,7 @@ public class AttendanceTrackingPlugin extends Plugin {
         try{call.resolve(new JSObject().put("token",store.token()));}catch(Exception e){call.reject("تعذر قراءة الجلسة");}
     }
     @PluginMethod public void status(PluginCall call){
-        try{JSObject result=new JSObject();String user=store.prefs.getString("user","");result.put("user",user.isEmpty()?JSONObject.NULL:new JSONObject(user));result.put("active",store.active());result.put("pending",store.pending());result.put("error",store.prefs.getString("error",""));result.put("locationLabel",store.prefs.getString("locationLabel",""));call.resolve(result);}catch(Exception e){call.reject("تعذر قراءة البيانات المحلية");}
+        try{JSObject result=new JSObject();String user=store.prefs.getString("user","");result.put("user",user.isEmpty()?JSONObject.NULL:new JSONObject(user));result.put("active",store.active());result.put("tracking",store.active()&&store.allowed());result.put("pending",store.pending());result.put("error",store.prefs.getString("error",""));result.put("locationLabel",store.prefs.getString("locationLabel",""));call.resolve(result);}catch(Exception e){call.reject("تعذر قراءة البيانات المحلية");}
     }
     @PluginMethod public void start(PluginCall call){
         if(starting){call.reject("انتظر التقاط GPS");return;}
@@ -43,29 +43,17 @@ public class AttendanceTrackingPlugin extends Plugin {
         getActivity().runOnUiThread(()->begin(call));
     }
     private void begin(PluginCall call){
-        if(store.active()){call.resolve();return;}
-        try {if(!new JSONObject(store.prefs.getString("user","{}")).optString("role").equals("employee")){call.reject("حساب موظف مطلوب");return;}}catch(Exception e){call.reject("سجل الدخول أولًا");return;}
-        starting=true;
-        LocationManager manager=(LocationManager)getContext().getSystemService(android.content.Context.LOCATION_SERVICE);
-        Handler handler=new Handler(Looper.getMainLooper());
-        final boolean[] completed={false};
-        LocationListener listener=new LocationListener(){
-            @Override public void onLocationChanged(Location fix){
-                if(completed[0]||(Build.VERSION.SDK_INT>=31?fix.isMock():fix.isFromMockProvider())||!fix.hasAccuracy()||System.currentTimeMillis()-fix.getTime()>30000)return;
-                completed[0]=true;manager.removeUpdates(this);handler.removeCallbacksAndMessages(null);starting=false;
-                try{store.record("clock_in",fix);store.setActive(true);getContext().startForegroundService(new Intent(getContext(),TrackingService.class));store.sync();call.resolve();}
-                catch(Exception e){try{store.record("clock_out",null);store.setActive(false);}catch(Exception ignored){} call.reject("تعذر تشغيل التتبع؛ حاول مرة أخرى");}
-            }
-        };
-        boolean requested=false;
         try {
-            for(String provider:new String[]{LocationManager.GPS_PROVIDER,LocationManager.NETWORK_PROVIDER})if(manager.isProviderEnabled(provider)){manager.requestLocationUpdates(provider,1000,0,listener,Looper.getMainLooper());requested=true;}
-        }catch(SecurityException e){starting=false;call.reject("اسمح بالموقع الدقيق");return;}
-        if(!requested){starting=false;call.reject("شغّل GPS ثم حاول مرة أخرى");return;}
-        handler.postDelayed(()->{if(!completed[0]){completed[0]=true;manager.removeUpdates(listener);starting=false;call.reject("تعذر التقاط موقع حديث؛ شغّل GPS وحاول مرة أخرى");}},25000);
+            if(!new JSONObject(store.prefs.getString("user","{}")).optString("role").equals("employee")){call.reject("حساب موظف مطلوب");return;}
+            if(!store.hasSchedule()){call.reject("اتصل بالإنترنت لتحديث مواعيد الشيفت أولًا");return;}
+            store.setActive(true);getContext().startForegroundService(new Intent(getContext(),TrackingService.class));store.sync();call.resolve();
+        }catch(Exception e){call.reject("تعذر تفعيل متابعة الشيفت");}
     }
     @PluginMethod public void stop(PluginCall call){
-        try{synchronized(store){if(store.active()){store.record("clock_out",null);store.setActive(false);}}getContext().stopService(new Intent(getContext(),TrackingService.class));store.sync();call.resolve();}catch(Exception e){call.reject("تعذر حفظ الانصراف؛ لم يتوقف الشيفت");}
+        try{store.setActive(false);getContext().stopService(new Intent(getContext(),TrackingService.class));store.sync();call.resolve();}catch(Exception e){call.reject("تعذر إيقاف المتابعة");}
+    }
+    @PluginMethod public void setSchedule(PluginCall call){
+        try{store.setSchedule(new JSONObject(call.getString("schedule","{}")));call.resolve();}catch(Exception e){call.reject("مواعيد المتابعة غير صالحة");}
     }
     @PluginMethod public void sync(PluginCall call){store.sync();call.resolve();}
     @PluginMethod public void resetEpoch(PluginCall call){

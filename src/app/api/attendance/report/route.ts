@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     const result = await query<AttendanceLog>(`(SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp < $2 ORDER BY timestamp DESC, id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp < $2 AND event_type IN ('clock_in','clock_out') ORDER BY timestamp DESC,id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp >= $2 AND timestamp < $3)
-        ORDER BY timestamp, id`, [user.id, rangeStart.toISOString(), rangeEnd.toISOString()]);
+        ORDER BY timestamp, id`, [user.id, new Date(+rangeStart-86400000).toISOString(), new Date(+rangeEnd+86400000).toISOString()]);
       return { user,date:reportDay, ...buildReport(user, result.rows, {...settings,grace_period_mins:user.grace_period_mins}, reportDay, rangeStart, rangeEnd) };
     }));
     return NextResponse.json({ date: day, timeZone: TIME_ZONE, settings, reports }, { headers: { 'Cache-Control': 'private, no-store' } });

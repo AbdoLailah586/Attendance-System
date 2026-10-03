@@ -1,16 +1,29 @@
 import { evaluatePunctuality, formatDurationArabic, StoreSettings } from './geo';
 import { shiftWindow } from './time';
+import { localDate } from './time';
+
+function shiftDay(log:AttendanceLog){return typeof log.shift_day==='string'?log.shift_day.slice(0,10):log.shift_day?localDate(new Date(log.shift_day)):null;}
 
 export interface AttendanceLog {
   id: number; timestamp: string | Date; branch_id: string; event_type: string;
   lat?: number; lng?: number; accuracy?: number; received_at?: string; client_event_id?: string;
+  source?: string; shift_day?: string | Date; nfc_scan_id?: number;
+}
+export interface AttendanceReport {
+  attendanceSource:string;missingCheckout:boolean;missingArrival:boolean;provisionalMinutes:number;
+  hasLogs:boolean;logCount:number;firstArrival:string|null;lastDeparture:string|null;onDuty:boolean;exitCount:number;
+  punctuality:ReturnType<typeof evaluatePunctuality>;
+  summary:{totalMinutes:number;totalFormatted:string;branch1Minutes:number;branch1Formatted:string;branch2Minutes:number;branch2Formatted:string;outsideMinutes:number;outsideFormatted:string;unknownMinutes:number;unknownFormatted:string;regularMinutes:number;regularFormatted:string;overtimeMinutes:number;overtimeFormatted:string;earlyDepartureMinutes:number;earlyDepartureFormatted:string;branches:{id:string;name:string;minutes:number;formatted:string}[]};
+  timeline:{branch_id:string;branch_name:string;start:string;end:string;durationMinutes:number;durationFormatted:string}[];
 }
 
 export function buildReport(
   user: { shift_start?: string; shift_end?: string }, logs: AttendanceLog[], settings: StoreSettings,
   day: string, rangeStart: Date, rangeEnd: Date, now = new Date(),
-) {
+):AttendanceReport {
   const shift = shiftWindow(day, user.shift_start || settings.shift_start_time, user.shift_end || settings.shift_end_time);
+  const usesCard=settings.attendance_mode==='nfc'&&(!settings.nfc_enabled_at||day>=localDate(new Date(settings.nfc_enabled_at)));
+  if(usesCard||logs.some(l=>l.source==='nfc'&&shiftDay(l)===day))return cardReport(user,logs,settings,day,shift,now);
   const cutoff = Math.min(now.getTime(), rangeEnd.getTime());
   const gapLimit = Math.max(180, settings.ping_interval_secs * 3) * 1000;
   const totals: Record<string, number> = { branch1: 0, branch2: 0, outside: 0, unknown: 0 };
@@ -72,6 +85,7 @@ export function buildReport(
   const minutes = (value: number) => Math.round(value);
   const earlyDeparture = !onDuty && lastDeparture ? Math.max(0, (shift.end.getTime() - Date.parse(lastDeparture)) / 60000) : 0;
   return {
+    attendanceSource:'gps',missingCheckout:false,missingArrival:false,provisionalMinutes:0,
     hasLogs: logs.some(l => new Date(l.timestamp) >= rangeStart), logCount: logs.length,
     firstArrival, lastDeparture, onDuty, exitCount,
     punctuality: evaluatePunctuality(firstArrival, user.shift_start || settings.shift_start_time, settings.grace_period_mins, shift.start),
@@ -86,5 +100,29 @@ export function buildReport(
       earlyDepartureMinutes: minutes(earlyDeparture), earlyDepartureFormatted: formatDurationArabic(earlyDeparture),
       branches: Object.entries(totals).filter(([key]) => inside(key)).map(([id, value]) => ({ id, name: names[id] || id, minutes: minutes(value), formatted: formatDurationArabic(value) })),
     }, timeline,
+  };
+}
+
+// Card attendance and sampled GPS evidence are deliberately calculated separately.
+function cardReport(user:{shift_start?:string;shift_end?:string},logs:AttendanceLog[],settings:StoreSettings,day:string,shift:{start:Date;end:Date},now:Date):AttendanceReport{
+  const cards=logs.filter(l=>l.source==='nfc'&&shiftDay(l)===day&&new Date(l.timestamp)<=now).sort((a,b)=>+new Date(a.timestamp)-+new Date(b.timestamp)||a.id-b.id);
+  const arrival=cards.find(l=>l.event_type==='clock_in'),departure=cards.find(l=>l.event_type==='clock_out');
+  const firstArrival=arrival?new Date(arrival.timestamp).toISOString():null,lastDeparture=departure?new Date(departure.timestamp).toISOString():null;
+  const start=arrival?+new Date(arrival.timestamp):+shift.start,end=departure?+new Date(departure.timestamp):Math.min(+now,+shift.end);
+  const from=Math.max(start,+shift.start),to=Math.max(from,Math.min(end,+shift.end,+now));
+  const gps=logs.filter(l=>l.event_type==='ping'&&l.source!=='nfc'&&+new Date(l.timestamp)>=from&&+new Date(l.timestamp)<to);
+  const controls:AttendanceLog[]=arrival?[{id:-2,timestamp:new Date(from),branch_id:'unknown',event_type:'clock_in',client_event_id:'gps-evidence'},...gps,{id:Number.MAX_SAFE_INTEGER,timestamp:new Date(to),branch_id:'unknown',event_type:'clock_out',client_event_id:'gps-evidence'}]:[];
+  const evidence=buildReport(user,controls,{...settings,attendance_mode:'gps'},day,new Date(from),new Date(to),now);
+  const validPair=Boolean(arrival&&departure&&end>=start);
+  const total=validPair?(end-start)/60000:0;
+  const regular=validPair?Math.max(0,Math.min(end,+shift.end)-Math.max(start,+shift.start))/60000:0;
+  const overtime=validPair?Math.max(0,end-Math.max(start,+shift.end))/60000:0;
+  const early=validPair?Math.max(0,(+shift.end-end)/60000):0;
+  return {...evidence,attendanceSource:'nfc',hasLogs:cards.length>0||gps.length>0,logCount:cards.length+gps.length,
+    firstArrival,lastDeparture,onDuty:Boolean(arrival&&!departure&&now<shift.end),
+    missingCheckout:Boolean(arrival&&!departure),missingArrival:Boolean(departure&&!arrival)||Boolean(arrival&&departure&&end<start),
+    provisionalMinutes:arrival&&!departure?Math.round(Math.max(0,end-start)/60000):0,
+    punctuality:evaluatePunctuality(firstArrival,user.shift_start||settings.shift_start_time,settings.grace_period_mins,shift.start),
+    summary:{...evidence.summary,totalMinutes:Math.round(total),totalFormatted:formatDurationArabic(total),regularMinutes:Math.round(regular),regularFormatted:formatDurationArabic(regular),overtimeMinutes:Math.round(overtime),overtimeFormatted:formatDurationArabic(overtime),earlyDepartureMinutes:Math.round(early),earlyDepartureFormatted:formatDurationArabic(early)},
   };
 }

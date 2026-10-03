@@ -3,6 +3,9 @@ import { getPool } from '@/lib/db';
 import { getActiveSession } from '@/lib/auth';
 import { verifiedBranchLocation } from '@/lib/geo';
 import { loadSettings } from '@/lib/schema';
+import {scheduleWindows,inTrackingWindow} from '@/lib/tracking-window';
+import type {AppUser} from '@/lib/types';
+import type {EmployeePolicy} from '@/lib/period-report';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TYPES = new Set(['ping', 'clock_in', 'clock_out']);
@@ -39,6 +42,8 @@ export async function POST(req: NextRequest) {
     try {
       await client.query('BEGIN');
       const reset = (await client.query("SELECT attendance_reset_at FROM settings WHERE id='main' FOR SHARE")).rows[0]?.attendance_reset_at;
+      const user=(await client.query<AppUser>("SELECT *,to_char(attendance_start_date,'YYYY-MM-DD') AS attendance_start_date FROM users WHERE id=$1",[session.id])).rows[0];
+      const policies=(await client.query<EmployeePolicy>("SELECT *,to_char(effective_from,'YYYY-MM-DD') AS effective_from FROM employee_policies WHERE user_id=$1",[session.id])).rows;
       const acknowledgements = [];
       let latest;
       let location;
@@ -46,6 +51,19 @@ export async function POST(req: NextRequest) {
         if (reset && event.time < new Date(reset).getTime()) {
           acknowledgements.push({client_event_id:event.client_event_id,duplicate:false,discarded:true,reason:'attendance_reset'});
           continue;
+        }
+        // Discard obsolete mobile controls so queued batches can continue syncing.
+        if(settings.attendance_mode==='nfc'&&event.event_type!=='ping'){
+          acknowledgements.push({client_event_id:event.client_event_id,discarded:true,reason:'nfc_required'});continue;
+        }
+        const windows=scheduleWindows(user,policies,new Date(event.time));
+        const window=windows.find(w=>event.time>=w.start&&event.time<w.end);
+        if(!inTrackingWindow(windows,event.time)){
+          acknowledgements.push({client_event_id:event.client_event_id,discarded:true,reason:'outside_shift'});continue;
+        }
+        const out=window?(await client.query("SELECT timestamp FROM attendance_logs WHERE user_id=$1 AND source='nfc' AND shift_day=$2 AND event_type='clock_out'",[session.id,window.day])).rows[0]:null;
+        if(out&&event.time>=+new Date(out.timestamp)){
+          acknowledgements.push({client_event_id:event.client_event_id,discarded:true,reason:'after_nfc_checkout'});continue;
         }
         const geo = event.lat == null ? null : verifiedBranchLocation(event.lat, event.lng, event.accuracy, settings);
         const branch = geo?.branch_id || 'unknown';

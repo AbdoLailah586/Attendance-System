@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
       const {start,end}=dayWindow(reportDay,{shift_start:shiftStart,shift_end:shiftEnd});
       const result = await query<AttendanceLog>(`(SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp < $2 ORDER BY timestamp DESC,id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp < $2 AND event_type IN ('clock_in','clock_out') ORDER BY timestamp DESC,id DESC LIMIT 1)
-        UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp >= $2 AND timestamp <= NOW()) ORDER BY timestamp,id`, [user.id, start.toISOString()]);
+        UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp >= $2 AND timestamp <= NOW()) ORDER BY timestamp,id`, [user.id, new Date(+start-86400000).toISOString()]);
       const report = buildReport(user, result.rows, {...settings,grace_period_mins:user.grace_period_mins}, reportDay, start, end);
       const latestLog = result.rows.at(-1) || null;
       const minutesSincePing = latestLog ? Math.floor((Date.now() - new Date(latestLog.timestamp).getTime()) / 60000) : null;

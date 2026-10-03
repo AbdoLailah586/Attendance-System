@@ -6,7 +6,7 @@ import { loadSettings } from '@/lib/schema';
 import { localDate, validDay } from '@/lib/time';
 import type { PoolClient } from 'pg';
 
-const fields="id,username,name,phone,role,shift_start,shift_end,is_active,work_days,cycle_start_day,grace_period_mins,to_char(attendance_start_date,'YYYY-MM-DD') AS attendance_start_date,created_at";
+const fields="nfc_in_before,nfc_in_after,nfc_out_before,nfc_out_after,id,username,name,phone,role,shift_start,shift_end,is_active,work_days,cycle_start_day,grace_period_mins,to_char(attendance_start_date,'YYYY-MM-DD') AS attendance_start_date,created_at";
 function validation(b:Record<string,unknown>){
   for(const key of ['username','name'])if(b[key]!==undefined&&(typeof b[key]!=='string'||!(b[key] as string).trim()||(b[key] as string).length>(key==='name'?150:100)))return 'تحقق من الاسم واسم الدخول';
   if(b.password!==undefined&&(typeof b.password!=='string'||b.password.length<6||b.password.length>200))return 'كلمة المرور لا تقل عن 6 أحرف';
@@ -19,12 +19,13 @@ function validation(b:Record<string,unknown>){
   if(b.cycle_start_day!==undefined&&(!Number.isInteger(b.cycle_start_day)||Number(b.cycle_start_day)<1||Number(b.cycle_start_day)>31))return 'بداية الدورة من 1 إلى 31';
   for(const key of ['effective_from','attendance_start_date'])if(b[key]!==undefined&&(typeof b[key]!=='string'||!validDay(b[key] as string)))return 'تاريخ غير صالح';
   if(b.effective_from!==undefined&&String(b.effective_from)>localDate())return 'تاريخ السريان يجب أن يكون اليوم أو يومًا سابقًا';
+  for(const key of ['nfc_in_before','nfc_in_after','nfc_out_before','nfc_out_after'])if(b[key]!==undefined&&(!Number.isInteger(b[key])||Number(b[key])<0||Number(b[key])>720))return 'نافذة الكارت من 0 إلى 720 دقيقة';
   return null;
 }
 async function policy(client:PoolClient,id:number,day:string){
-  await client.query(`INSERT INTO employee_policies(user_id,effective_from,shift_start,shift_end,work_days,cycle_start_day,grace_period_mins,role,is_active)
-    SELECT id,$2,shift_start,shift_end,work_days,cycle_start_day,grace_period_mins,role,is_active FROM users WHERE id=$1
-    ON CONFLICT(user_id,effective_from) DO UPDATE SET shift_start=EXCLUDED.shift_start,shift_end=EXCLUDED.shift_end,work_days=EXCLUDED.work_days,cycle_start_day=EXCLUDED.cycle_start_day,grace_period_mins=EXCLUDED.grace_period_mins,role=EXCLUDED.role,is_active=EXCLUDED.is_active`,[id,day]);
+  await client.query(`INSERT INTO employee_policies(user_id,effective_from,shift_start,shift_end,work_days,cycle_start_day,grace_period_mins,role,is_active,nfc_in_before,nfc_in_after,nfc_out_before,nfc_out_after)
+    SELECT id,$2,shift_start,shift_end,work_days,cycle_start_day,grace_period_mins,role,is_active,nfc_in_before,nfc_in_after,nfc_out_before,nfc_out_after FROM users WHERE id=$1
+    ON CONFLICT(user_id,effective_from) DO UPDATE SET shift_start=EXCLUDED.shift_start,shift_end=EXCLUDED.shift_end,work_days=EXCLUDED.work_days,cycle_start_day=EXCLUDED.cycle_start_day,grace_period_mins=EXCLUDED.grace_period_mins,role=EXCLUDED.role,is_active=EXCLUDED.is_active,nfc_in_before=EXCLUDED.nfc_in_before,nfc_in_after=EXCLUDED.nfc_in_after,nfc_out_before=EXCLUDED.nfc_out_before,nfc_out_after=EXCLUDED.nfc_out_after`,[id,day]);
 }
 function failure(error:unknown){
   if((error as {code?:string})?.code==='23505')return NextResponse.json({error:'اسم الدخول مستخدم بالفعل'},{status:409});
@@ -35,7 +36,7 @@ export async function GET(req:NextRequest){
   try{
     await loadSettings();
     const users=await query(`SELECT ${fields} FROM users ORDER BY role,id`);
-    const policies=await query("SELECT user_id,to_char(effective_from,'YYYY-MM-DD') AS effective_from,shift_start,shift_end,work_days,cycle_start_day,grace_period_mins,role,is_active FROM employee_policies ORDER BY effective_from DESC");
+    const policies=await query("SELECT user_id,to_char(effective_from,'YYYY-MM-DD') AS effective_from,shift_start,shift_end,work_days,cycle_start_day,grace_period_mins,role,is_active,nfc_in_before,nfc_in_after,nfc_out_before,nfc_out_after FROM employee_policies ORDER BY effective_from DESC");
     return NextResponse.json({users:users.rows,policies:policies.rows});
   }catch(e){return failure(e);}
 }
@@ -47,9 +48,9 @@ export async function POST(req:NextRequest){
     const defaults=await loadSettings();const client=await getPool().connect();
     try{
       await client.query('BEGIN');
-      const result=await client.query(`INSERT INTO users(username,password,name,phone,role,shift_start,shift_end,is_active,work_days,cycle_start_day,grace_period_mins,attendance_start_date)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING ${fields}`,
-        [b.username.trim(),hashPassword(b.password),b.name.trim(),b.phone?.trim()||null,b.role||'employee',b.shift_start||defaults.shift_start_time,b.shift_end||defaults.shift_end_time,b.is_active??true,b.work_days||[0,1,2,3,4,5,6],b.cycle_start_day||1,b.grace_period_mins??defaults.grace_period_mins,b.attendance_start_date||localDate()]);
+      const result=await client.query(`INSERT INTO users(username,password,name,phone,role,shift_start,shift_end,is_active,work_days,cycle_start_day,grace_period_mins,attendance_start_date,nfc_in_before,nfc_in_after,nfc_out_before,nfc_out_after)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING ${fields}`,
+        [b.username.trim(),hashPassword(b.password),b.name.trim(),b.phone?.trim()||null,b.role||'employee',b.shift_start||defaults.shift_start_time,b.shift_end||defaults.shift_end_time,b.is_active??true,b.work_days||[0,1,2,3,4,5,6],b.cycle_start_day||1,b.grace_period_mins??defaults.grace_period_mins,b.attendance_start_date||localDate(),b.nfc_in_before??60,b.nfc_in_after??120,b.nfc_out_before??60,b.nfc_out_after??180]);
       await policy(client,result.rows[0].id,b.effective_from||b.attendance_start_date||localDate());
       await client.query('COMMIT');return NextResponse.json({success:true,user:result.rows[0]});
     }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
@@ -72,9 +73,10 @@ export async function PUT(req:NextRequest){
       }
       const result=await client.query(`UPDATE users SET username=COALESCE($1,username),name=COALESCE($2,name),phone=COALESCE($3,phone),role=COALESCE($4,role),
         shift_start=COALESCE($5,shift_start),shift_end=COALESCE($6,shift_end),is_active=COALESCE($7,is_active),password=COALESCE($8,password),
-        work_days=COALESCE($9,work_days),cycle_start_day=COALESCE($10,cycle_start_day),grace_period_mins=COALESCE($11,grace_period_mins),attendance_start_date=COALESCE($12::date,attendance_start_date)
-        WHERE id=$13 RETURNING ${fields}`,[b.username?.trim(),b.name?.trim(),b.phone?.trim(),b.role,b.shift_start,b.shift_end,b.is_active,b.password?hashPassword(b.password):null,b.work_days,b.cycle_start_day,b.grace_period_mins,b.attendance_start_date,b.id]);
-      if(['shift_start','shift_end','work_days','cycle_start_day','grace_period_mins','role','is_active'].some(k=>b[k]!==undefined))await policy(client,b.id,b.effective_from||localDate());
+        work_days=COALESCE($9,work_days),cycle_start_day=COALESCE($10,cycle_start_day),grace_period_mins=COALESCE($11,grace_period_mins),attendance_start_date=COALESCE($12::date,attendance_start_date),
+        nfc_in_before=COALESCE($13,nfc_in_before),nfc_in_after=COALESCE($14,nfc_in_after),nfc_out_before=COALESCE($15,nfc_out_before),nfc_out_after=COALESCE($16,nfc_out_after)
+        WHERE id=$17 RETURNING ${fields}`,[b.username?.trim(),b.name?.trim(),b.phone?.trim(),b.role,b.shift_start,b.shift_end,b.is_active,b.password?hashPassword(b.password):null,b.work_days,b.cycle_start_day,b.grace_period_mins,b.attendance_start_date,b.nfc_in_before,b.nfc_in_after,b.nfc_out_before,b.nfc_out_after,b.id]);
+      if(['nfc_in_before','nfc_in_after','nfc_out_before','nfc_out_after','shift_start','shift_end','work_days','cycle_start_day','grace_period_mins','role','is_active'].some(k=>b[k]!==undefined))await policy(client,b.id,b.effective_from||localDate());
       await client.query('COMMIT');return NextResponse.json({success:true,user:result.rows[0],effective_from:b.effective_from||localDate()});
     }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
   }catch(e){return failure(e);}

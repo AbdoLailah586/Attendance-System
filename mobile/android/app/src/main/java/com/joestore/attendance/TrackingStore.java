@@ -97,7 +97,32 @@ final class TrackingStore extends SQLiteOpenHelper {
         scheduleSync();
     }
     synchronized void recordPing(android.location.Location location) throws Exception {
-        if (active()) record("ping", location);
+        if (active() && allowed()) record("ping", location);
+    }
+    synchronized void setSchedule(JSONObject schedule) throws Exception {
+        JSONArray windows=schedule.getJSONArray("windows");
+        if(!prefs.edit().putString("windows",windows.toString()).putLong("schedule_until",schedule.getLong("valid_until")).commit())throw new Exception("Cannot save schedule");
+    }
+    synchronized boolean hasSchedule(){return prefs.getLong("schedule_until",0)>System.currentTimeMillis();}
+    synchronized long windowEnd(){
+        try{JSONArray windows=new JSONArray(prefs.getString("windows","[]"));long now=System.currentTimeMillis();
+            for(int i=0;i<windows.length();i++){JSONObject w=windows.getJSONObject(i);if(now>=w.getLong("start")&&now<w.getLong("end"))return w.getLong("end");}
+        }catch(Exception ignored){}return 0;
+    }
+    synchronized boolean allowed(){return hasSchedule()&&windowEnd()>0;}
+    private final AtomicBoolean fetchingSchedule=new AtomicBoolean(false);
+    void refreshSchedule(){
+        if(!fetchingSchedule.compareAndSet(false,true))return;
+        NETWORK.execute(()->{try{
+            String credential=token();if(credential.isEmpty())return;
+            HttpsURLConnection c=(HttpsURLConnection)new URL(API+"/api/attendance/tracking-window").openConnection();
+            try{c.setConnectTimeout(10000);c.setReadTimeout(10000);c.setInstanceFollowRedirects(false);c.setRequestProperty("Authorization","Bearer "+credential);
+                int code=c.getResponseCode();if(code==401){prefs.edit().putString("windows","[]").apply();return;}if(code!=200)return;
+                try(java.io.InputStream stream=c.getInputStream();java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream()){
+                    byte[] buffer=new byte[4096];int n;while((n=stream.read(buffer))!=-1)bytes.write(buffer,0,n);setSchedule(new JSONObject(bytes.toString(StandardCharsets.UTF_8.name())));
+                }
+            }finally{c.disconnect();}
+        }catch(Exception ignored){}finally{fetchingSchedule.set(false);}});
     }
     void error(String message) { prefs.edit().putString("error", message).apply(); }
     synchronized void logout() throws Exception {

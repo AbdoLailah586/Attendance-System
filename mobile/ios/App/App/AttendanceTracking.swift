@@ -14,6 +14,8 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
     let api = URL(string: "https://attendance-system-joe-2026.vercel.app/api/attendance/ping")!
     private var queue: [[String: Any]] = []
     private var uploading = false
+    private var fetchingSchedule = false
+    private var shiftStop: DispatchWorkItem?
     private var startCall: CAPPluginCall?
     private var timeout: DispatchWorkItem?
     private var lastRecorded: Date = .distantPast
@@ -24,6 +26,31 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         return directory.appendingPathComponent("attendance-events.json")
     }
     var active: Bool { prefs.bool(forKey: "attendance-active") }
+    var windowEnd: Double {
+        guard let data=prefs.data(forKey:"attendance-windows"),let windows=(try? JSONSerialization.jsonObject(with:data)) as? [[String:Any]] else{return 0}
+        let now=Date().timeIntervalSince1970*1000
+        for w in windows { if let start=w["start"] as? Double,let end=w["end"] as? Double,now>=start && now<end{return end/1000} }
+        return 0
+    }
+    var allowed: Bool { windowEnd>0 && prefs.double(forKey:"attendance-schedule-until")>Date().timeIntervalSince1970*1000 }
+    func setSchedule(_ value:String) throws {
+        guard let bytes=value.data(using:.utf8),let schedule=(try JSONSerialization.jsonObject(with:bytes)) as? [String:Any],let windows=schedule["windows"] as? [[String:Any]],let until=schedule["valid_until"] as? Double else{throw problem("مواعيد الشيفت غير صالحة")}
+        prefs.set(try JSONSerialization.data(withJSONObject:windows),forKey:"attendance-windows");prefs.set(until,forKey:"attendance-schedule-until")
+        if active { if allowed {resume()} else {pauseAtEnd()} }
+    }
+    private func pauseAtEnd(){
+        shiftStop?.cancel();prefs.set(false,forKey:"attendance-active");manager.stopUpdatingLocation();manager.stopMonitoringSignificantLocationChanges()
+    }
+    private func refreshSchedule(){
+        guard !fetchingSchedule && !token().isEmpty else{return};fetchingSchedule=true
+        var request=URLRequest(url:URL(string:"https://attendance-system-joe-2026.vercel.app/api/attendance/tracking-window")!);request.timeoutInterval=15;request.setValue("Bearer \(token())",forHTTPHeaderField:"Authorization")
+        URLSession.shared.dataTask(with:request){data,response,error in DispatchQueue.main.async {
+            self.fetchingSchedule=false
+            if (response as? HTTPURLResponse)?.statusCode==401 {self.pauseAtEnd();return}
+            guard error==nil,(response as? HTTPURLResponse)?.statusCode==200,let data=data,let text=String(data:data,encoding:.utf8) else{return}
+            try? self.setSchedule(text)
+        }}.resume()
+    }
     var user: [String: Any]? {
         guard let data = prefs.data(forKey: "attendance-user") else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -94,6 +121,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         try persist(queue + [event])
     }
     func start(_ call: CAPPluginCall) {
+        guard allowed else {call.reject("GPS متاح داخل الشيفت فقط؛ حدّث المواعيد وفعّله عند البداية");return}
         guard startCall == nil else { call.reject("انتظر التقاط GPS"); return }
         guard user?["role"] as? String == "employee" else { call.reject("حساب موظف مطلوب"); return }
         if active { call.resolve(); return }
@@ -112,7 +140,13 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         timeout?.cancel(); startCall?.reject(message); startCall = nil
         if !active { manager.stopUpdatingLocation() }
     }
-    func resume() { manager.startUpdatingLocation(); manager.startMonitoringSignificantLocationChanges() }
+    func resume() {
+        guard allowed else {pauseAtEnd();return}
+        manager.startUpdatingLocation()
+        shiftStop?.cancel();let deadline=windowEnd
+        let work=DispatchWorkItem{[weak self] in self?.pauseAtEnd()};shiftStop=work
+        DispatchQueue.main.asyncAfter(deadline:.now()+max(0,deadline-Date().timeIntervalSince1970),execute:work)
+    }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         if manager.authorizationStatus == .authorizedAlways {
             if active { resume() } else if startCall != nil { manager.startUpdatingLocation() }
@@ -123,11 +157,12 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         }
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard allowed else {pauseAtEnd();failStart("انتهى وقت متابعة الشيفت");return}
         guard let fix = locations.last, fix.horizontalAccuracy >= 0, abs(fix.timestamp.timeIntervalSinceNow) < 30 else { return }
         if #available(iOS 15.0, *), fix.sourceInformation?.isSimulatedBySoftware == true { return }
         do {
             if let call = startCall {
-                try record(type: "clock_in", location: fix)
+                try record(type: "ping", location: fix)
                 prefs.set(true, forKey: "attendance-active")
                 prefs.set(Date().timeIntervalSince1970, forKey: "attendance-shift-started")
                 timeout?.cancel(); startCall = nil; lastRecorded = Date(); resume(); call.resolve()
@@ -141,7 +176,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         prefs.set("تعذر التقاط GPS؛ سيظهر الوقت كفجوة تتبع", forKey: "attendance-error")
     }
     func stop() throws {
-        if active { try record(type: "clock_out", location: nil); prefs.set(false, forKey: "attendance-active") }
+        if active { prefs.set(false, forKey: "attendance-active") };shiftStop?.cancel()
         manager.stopUpdatingLocation(); manager.stopMonitoringSignificantLocationChanges(); sync()
     }
     func logout() throws {
@@ -157,11 +192,12 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         }
     }
     func status() -> [String: Any] {
-        ["user": user.map { $0 as Any } ?? NSNull(), "active": active, "pending": queue.count,
+        ["user": user.map { $0 as Any } ?? NSNull(), "active": active, "tracking": active && allowed, "pending": queue.count,
          "error": queueError.isEmpty ? prefs.string(forKey: "attendance-error") ?? "" : queueError,
          "locationLabel": prefs.string(forKey: "attendance-location") ?? ""]
     }
     func sync() {
+        refreshSchedule()
         guard !uploading else { return }
         guard !queue.isEmpty && !token().isEmpty && queueError.isEmpty else { finishBackgroundUpload(); return }
         uploading = true
@@ -218,13 +254,14 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
 public class AttendanceTrackingPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "AttendanceTrackingPlugin"
     public let jsName = "AttendanceTracking"
-    public let pluginMethods: [CAPPluginMethod] = ["configure", "session", "status", "start", "stop", "sync", "logout", "openAdmin", "resetEpoch"].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
+    public let pluginMethods: [CAPPluginMethod] = ["configure", "session", "status", "start", "stop", "sync", "logout", "openAdmin", "resetEpoch", "setSchedule"].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
     private var engine: AttendanceEngine { AttendanceEngine.shared }
     public override func load() { DispatchQueue.main.async { _ = self.engine } }
     @objc func configure(_ call: CAPPluginCall) { DispatchQueue.main.async { do { try self.engine.configure(token: call.getString("token") ?? "", userString: call.getString("user") ?? "{}"); call.resolve() } catch { call.reject(error.localizedDescription) } } }
     @objc func session(_ call: CAPPluginCall) { DispatchQueue.main.async { call.resolve(["token": self.engine.token()]) } }
     @objc func status(_ call: CAPPluginCall) { DispatchQueue.main.async { call.resolve(self.engine.status()) } }
     @objc func resetEpoch(_ call: CAPPluginCall) { DispatchQueue.main.async { do { try self.engine.resetEpoch(call.getString("resetAt") ?? "");call.resolve() } catch { call.reject(error.localizedDescription) } } }
+    @objc func setSchedule(_ call: CAPPluginCall) { DispatchQueue.main.async { do {try self.engine.setSchedule(call.getString("schedule") ?? "{}");call.resolve()}catch{call.reject(error.localizedDescription)} } }
     @objc func start(_ call: CAPPluginCall) { DispatchQueue.main.async { self.engine.start(call) } }
     @objc func stop(_ call: CAPPluginCall) { DispatchQueue.main.async { do { try self.engine.stop(); call.resolve() } catch { call.reject(error.localizedDescription) } } }
     @objc func sync(_ call: CAPPluginCall) { DispatchQueue.main.async { self.engine.sync(); call.resolve() } }

@@ -31,16 +31,16 @@ function draw() {
   }
   const s = summary?.summary;
   app.innerHTML = `<header><span class="logo small">📍</span><div><small>الحضور الذكي · بتوقيت القاهرة</small><h2>${escape(state.user.name)}</h2></div></header>
-    <div class="connection"><span>${state.active?'التتبع أثناء الشيفت مفعّل':'التتبع متوقف'}</span><strong>${state.pending} أحداث محفوظة</strong></div>
-    <section class="card center"><p>${escape(state.user.shift_start||'10:00')} — ${escape(state.user.shift_end||'22:00')}</p><h1>${state.active?'الشيفت شغّال':'ابدأ يومك'}</h1><p>${escape(state.locationLabel || 'الموقع يُلتقط أثناء الشيفت')}</p>
-      ${state.user.role==='employee'?`<button id="toggle" class="${state.active?'danger':''}" ${working?'disabled':''}>${working?'جاري الحفظ…':state.active?'إنهاء الشيفت وتسجيل انصراف':'بدء الشيفت وتسجيل حضور'}</button>`:'<button id="admin">فتح لوحة الأدمين</button>'}
+    <div class="connection"><span>${state.tracking?'GPS داخل الشيفت شغّال':state.active?'المتابعة مفعّلة؛ GPS متوقف خارج الشيفت':'التتبع متوقف'}</span><strong>${state.pending} أحداث محفوظة</strong></div>
+    <section class="card center"><p>${escape(state.user.shift_start||'10:00')} — ${escape(state.user.shift_end||'22:00')}</p><h1>${'الحضور والانصراف بالكارت'}</h1><p>${escape(state.locationLabel || 'الموقع يُلتقط أثناء الشيفت')}</p>
+      ${state.user.role==='employee'?`<button id="toggle" class="${state.active?'danger':''}" ${working?'disabled':''}>${working?'جاري الحفظ…':state.active?'إيقاف متابعة الموقع':'تفعيل متابعة الموقع أثناء الشيفت'}</button>`:'<button id="admin">فتح لوحة الأدمين</button>'}
       <button id="sync" class="secondary" ${working?'disabled':''}>مزامنة وتحديث</button><p class="message" role="status">${escape(message || state.error)}</p></section>
-    <section class="card"><h3>ملخص اليوم</h3><p>${escape(summary?.punctuality?.message||'الملخص يظهر بعد المزامنة')}</p><div class="metrics">${[['حضور داخل الفروع',s?.totalFormatted],['إضافي بعد الشيفت',s?.overtimeFormatted],['خارج الفروع',s?.outsideFormatted],['فجوات التتبع',s?.unknownFormatted]].map(([name,value])=>`<div><small>${name}</small><strong>${escape(value||'—')}</strong></div>`).join('')}</div></section>
-    <section class="note">عند بدء الشيفت، يستخدم التطبيق موقعك في الخلفية لتحديد الفرع وحساب الحضور والخروج. ينتهي جمع الموقع عند تسجيل الانصراف. اسمح بالموقع الدقيق، وعلى iPhone اختر «دائمًا» للاستمرار في الخلفية. لو التطبيق اتقفل إجباريًا أو الجهاز اتطفى، افتحه تاني لاستكمال التتبع.</section><button id="renew" class="secondary">تجديد تسجيل الدخول</button><button id="logout" class="secondary">تسجيل الخروج</button>`;
+    <section class="card"><h3>ملخص اليوم</h3><p>${escape(summary?.punctuality?.message||'الملخص يظهر بعد المزامنة')}</p><div class="metrics">${[['الحضور المؤكد بالكارت',s?.totalFormatted],['إضافي بعد الشيفت',s?.overtimeFormatted],['خارج الفروع',s?.outsideFormatted],['فجوات التتبع',s?.unknownFormatted]].map(([name,value])=>`<div><small>${name}</small><strong>${escape(value||'—')}</strong></div>`).join('')}</div></section>
+    <section class="note">الحضور والانصراف الأساسيان بالكارت في الفرع. GPS يعمل خلال مواعيد الشيفت فقط لمتابعة الخروج، ويتوقف عند نهايته أو عند وصول انصراف الكارت. ساعات الشيفت المفتوح تنتظر قراءة الانصراف. على iPhone افتح التطبيق وفعّل المتابعة عند بداية كل شيفت؛ النظام لا يضمن تشغيل تطبيق مغلق تلقائيًا. اسمح بالموقع الدقيق، وعلى iPhone اختر «دائمًا» للاستمرار في الخلفية. لو التطبيق اتقفل إجباريًا أو الجهاز اتطفى، افتحه تاني لاستكمال التتبع.</section><button id="renew" class="secondary">تجديد تسجيل الدخول</button><button id="logout" class="secondary">تسجيل الخروج</button>`;
   const toggle = app.querySelector('#toggle');
   if (toggle) toggle.onclick = async () => {
     working=true;draw();
-    try {if(state.active)await Tracking.stop();else await Tracking.start();state=await Tracking.status();message=state.active?'تم بدء الشيفت وحفظ الحدث':'تم حفظ الانصراف وإيقاف جمع الموقع';}
+    try {if(state.active)await Tracking.stop();else await Tracking.start();state=await Tracking.status();message=state.active?'تم تفعيل متابعة الموقع داخل الشيفت فقط':'تم إيقاف الموقع؛ سجّل الانصراف بالكارت';}
     catch(error){message=error.message;}finally{working=false;draw();}
     void refresh();
   };
@@ -60,6 +60,7 @@ async function refresh() {
         await Tracking.configure({token,user:JSON.stringify(identity.user)});state=await Tracking.status();
       }
       if(state.user.role==='employee'){
+        const schedule=await request('/api/attendance/tracking-window',null,token);await Tracking.setSchedule({schedule:JSON.stringify(schedule)});
         const data=await request('/api/attendance/report',null,token);
         if(data.settings.attendance_reset_at){await Tracking.resetEpoch({resetAt:data.settings.attendance_reset_at});state=await Tracking.status();}
         summary=data.reports?.[0];localStorage.setItem(`summary-${state.user.id}`,JSON.stringify(summary));

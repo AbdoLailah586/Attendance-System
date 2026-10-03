@@ -21,6 +21,7 @@ import AttendanceMap from './AttendanceMap';
 import AttendanceLogViewer from './AttendanceLogViewer';
 import BranchManager from './BranchManager';
 import AttendanceReports from './AttendanceReports';
+import NfcManager from './NfcManager';
 import EmployeeEditor from './EmployeeEditor';
 import type { EmployeePolicy } from '@/lib/period-report';
 import type { AppUser, LiveEmployee } from '@/lib/types';
@@ -31,7 +32,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({}: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'live' | 'reports' | 'settings' | 'users' | 'logs'>('live');
+  const [activeTab, setActiveTab] = useState<'live' | 'reports' | 'settings' | 'users' | 'logs' | 'nfc'>('live');
 
   // Live data
   const [liveData, setLiveData] = useState<LiveEmployee[]>([]);
@@ -275,6 +276,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
 
       {/* Navigation Tabs */}
       <div className="tab-list">
+        <button className={`tab-button ${activeTab === 'nfc' ? 'active' : ''}`} onClick={() => setActiveTab('nfc')}>الكروت وقارئات الفروع</button>
         <button className={`tab-button ${activeTab === 'logs' ? 'active' : ''}`} onClick={() => setActiveTab('logs')}>كل سجلات الحضور والحركة</button>
         <button
           className={`tab-button ${activeTab === 'live' ? 'active' : ''}`}
@@ -320,6 +322,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
       </div>
 
       {/* TAB 1: LIVE RADAR & MAP */}
+      {activeTab === 'nfc' && <NfcManager users={usersList} />}
       {activeTab === 'logs' && <AttendanceLogViewer />}
       {activeTab === 'settings' && <BranchManager onSaved={fetchLiveData} />}
       {activeTab === 'live' && (

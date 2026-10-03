@@ -43,3 +43,5 @@ next-env.d.ts
 artifacts/*.apk
 artifacts/ios-simulator/
 artifacts/*.jpg
+firmware/**/.pio/
+firmware/**/include/config.h

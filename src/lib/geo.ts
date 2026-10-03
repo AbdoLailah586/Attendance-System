@@ -2,6 +2,8 @@
 
 export interface Branch { id: string; name: string; lat: number; lng: number; radius: number; is_active?: boolean }
 export interface StoreSettings {
+  attendance_mode?: string;
+  nfc_enabled_at?: string;
   attendance_reset_at?: string | null;
   branches?: Branch[];
   id: string;

@@ -1,134 +1,58 @@
 'use client';
-
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { MapPin, Play, Square, RefreshCw, Wifi, WifiOff, Clock, ShieldCheck } from 'lucide-react';
-import { verifiedBranchLocation, StoreSettings } from '@/lib/geo';
-import { EventType, pendingEvents, saveEvent, syncEvents } from '@/lib/offline';
-import { buildReport } from '@/lib/attendance';
-
-type PersonalReport = ReturnType<typeof buildReport>;
-interface Props { user: { id: number; name: string; username: string; shift_start?: string; shift_end?: string } }
-export default function EmployeeTracker({ user }: Props) {
-  const [settings, setSettings] = useState<StoreSettings | null>(null);
-  const [report, setReport] = useState<PersonalReport | null>(null);
-  const [onDuty, setOnDuty] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [online, setOnline] = useState(true);
-  const [queued, setQueued] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const [syncError, setSyncError] = useState('');
-  const [position, setPosition] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
-  const [lastSaved, setLastSaved] = useState<string | null>(null);
-  const capturing = useRef(false);
-  const duty = useRef(false);
-  const storageKey = `attendance-duty-${user.id}`;
-  const refresh = useCallback(async () => {
-    const response = await fetch('/api/attendance/report', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error('تعذر تحديث التقرير');
-    const data = await response.json();
-    const reset=data.settings?.attendance_reset_at;
-    if(reset&&localStorage.getItem(`attendance-reset-${user.id}`)!==reset){
-      duty.current=Boolean(data.reports?.[0]?.onDuty);setOnDuty(duty.current);localStorage.setItem(storageKey,String(duty.current));
-      localStorage.setItem(`attendance-reset-${user.id}`,reset);
-      setPosition(null);setLastSaved(null);setMessage('الإدارة بدأت سجل حضور جديد؛ ابدأ الشيفت لتسجيل حضورك الفعلي');
-    }
-    setSettings(data.settings); setReport(data.reports?.[0] || null);
-    localStorage.setItem(`attendance-summary-${user.id}`, JSON.stringify(data));
-    return data;
-  }, [user.id,storageKey]);
-  const sync = useCallback(async () => {
-    try {
+import {useCallback,useEffect,useRef,useState} from 'react';
+import {MapPin,RefreshCw,ShieldCheck} from 'lucide-react';
+import {pendingEvents,saveEvent,syncEvents} from '@/lib/offline';
+import {verifiedBranchLocation,type StoreSettings} from '@/lib/geo';
+import {inTrackingWindow,type TrackingWindow} from '@/lib/tracking-window';
+import type {AttendanceReport} from '@/lib/attendance';
+import type {AppUser} from '@/lib/types';
+export default function EmployeeTracker({user}:{user:AppUser}){
+  const [report,setReport]=useState<AttendanceReport|null>(null),[settings,setSettings]=useState<StoreSettings|null>(null),[windows,setWindows]=useState<TrackingWindow[]>([]);
+  const [enabled,setEnabled]=useState(false),[tracking,setTracking]=useState(false),[queued,setQueued]=useState(0),[message,setMessage]=useState(''),[ready,setReady]=useState(false),[now,setNow]=useState(0);
+  const [position,setPosition]=useState<{lat:number;lng:number;accuracy:number}|null>(null);
+  const saving=useRef(false),lastSaved=useRef(0);
+  const key=`attendance-gps-consent-${user.id}`;
+  const refresh=useCallback(async()=>{
+    try{
       setQueued((await pendingEvents(user.id)).length);
-      if (!navigator.onLine) return;
-      await syncEvents(user.id);
-      setSyncError('');
-      setQueued((await pendingEvents(user.id)).length);
-      await refresh();
-    } catch (error) { setSyncError(error instanceof Error ? error.message : 'الأحداث محفوظة؛ المزامنة مؤجلة'); }
-  }, [user.id, refresh]);
-  useEffect(() => {
-    let mounted = true;
-    const boot = async () => {
-      setOnline(navigator.onLine);
-      try {
-        const cached = localStorage.getItem(`attendance-summary-${user.id}`);
-        if (cached) { const data = JSON.parse(cached); setSettings(data.settings); setReport(data.reports?.[0] || null); }
-        const queue = await pendingEvents(user.id);
-        setQueued(queue.length);
-        const stored = localStorage.getItem(storageKey);
-        let active = stored === 'true';
-        if (stored === null && navigator.onLine) { const data = await refresh(); active = Boolean(data.reports?.[0]?.onDuty); }
-        // A queued clock-out takes priority over an older server state.
-        const lastControl = queue.filter(e => e.event_type !== 'ping').at(-1);
-        if (lastControl) active = lastControl.event_type === 'clock_in';
-        if (mounted) { duty.current = active; setOnDuty(active); setReady(true); }
-        await sync();
-        if (navigator.storage?.persist) void navigator.storage.persist();
-      } catch (error) { if (mounted) { setMessage(error instanceof Error ? error.message : 'تعذر تحميل الحضور'); setReady(true); } }
+      if(!navigator.onLine)return;
+      await syncEvents(user.id);setQueued((await pendingEvents(user.id)).length);
+      const [r,s]=await Promise.all([fetch('/api/attendance/report',{cache:'no-store'}),fetch('/api/attendance/tracking-window',{cache:'no-store'})]);
+      if(!r.ok||!s.ok)throw new Error('تعذر تحديث الحضور أو مواعيد المتابعة');
+      const data=await r.json(),schedule=await s.json();setReport(data.reports?.[0]||null);setSettings(data.settings);setWindows(schedule.windows);
+      localStorage.setItem(`attendance-gps-cache-${user.id}`,JSON.stringify({report:data.reports?.[0],settings:data.settings,windows:schedule.windows}));
+    }catch(e){setMessage((e as Error).message+'؛ الأحداث المحفوظة تنتظر المزامنة');}
+  },[user.id]);
+  useEffect(()=>{
+    queueMicrotask(()=>{setEnabled(localStorage.getItem(key)==='true');try{const c=JSON.parse(localStorage.getItem(`attendance-gps-cache-${user.id}`)||'null');if(c){setReport(c.report);setSettings(c.settings);setWindows(c.windows||[]);}}catch{}setReady(true);void refresh();});
+    const timer=setInterval(()=>void refresh(),30000);window.addEventListener('online',refresh);
+    return()=>{clearInterval(timer);window.removeEventListener('online',refresh);};
+  },[key,user.id,refresh]);
+  useEffect(()=>{
+    if(!ready)return;
+    let watch:number|undefined;
+    const stop=()=>{if(watch!==undefined){navigator.geolocation?.clearWatch(watch);watch=undefined;}setTracking(false);setPosition(null);};
+    const check=()=>{
+      setNow(Date.now());
+      if(!enabled||!inTrackingWindow(windows)){stop();return;}
+      if(watch!==undefined)return;
+      if(!navigator.geolocation){setMessage('الجهاز لا يدعم الموقع');return;}
+      watch=navigator.geolocation.watchPosition(fix=>{
+        if(!inTrackingWindow(windows)){stop();return;}
+        if(saving.current||Date.now()-lastSaved.current<Math.max(15,settings?.ping_interval_secs||60)*1000)return;
+        const geo={lat:fix.coords.latitude,lng:fix.coords.longitude,accuracy:fix.coords.accuracy};setPosition(geo);saving.current=true;
+        void saveEvent({user_id:user.id,event_type:'ping',recorded_at:new Date().toISOString(),...geo}).then(()=>{lastSaved.current=Date.now();setMessage('تم حفظ الموقع داخل وقت الشيفت');return refresh();}).catch(()=>setMessage('تعذر الحفظ؛ راجع مساحة التخزين')).finally(()=>{saving.current=false;});
+      },()=>setMessage('اسمح بالموقع الدقيق وشغّل GPS؛ الحضور بالكارت لا يتأثر'),{enableHighAccuracy:true,maximumAge:0,timeout:20000});
+      setTracking(true);
     };
-    void boot();
-    const connection = () => { setOnline(navigator.onLine); if (navigator.onLine) void sync(); };
-    window.addEventListener('online', connection); window.addEventListener('offline', connection);
-    const timer = setInterval(() => void sync(), 30000);
-    return () => { mounted = false; clearInterval(timer); window.removeEventListener('online', connection); window.removeEventListener('offline', connection); };
-  }, [user.id, storageKey, refresh, sync]);
-  const capture = useCallback(async (type: EventType) => {
-    if (capturing.current || (type === 'ping' && !duty.current)) return;
-    capturing.current = true; setBusy(true); setMessage('');
-    try {
-      let location: { lat: number; lng: number; accuracy: number } | null = null;
-      if (type !== 'clock_out') {
-        const fix = await new Promise<GeolocationPosition>((resolve, reject) => {
-          if (!navigator.geolocation) return reject(new Error('الجهاز لا يدعم الموقع'));
-          navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error('شغّل GPS واسمح بالوصول للموقع ثم حاول مرة أخرى')), { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
-        });
-        location = { lat: fix.coords.latitude, lng: fix.coords.longitude, accuracy: fix.coords.accuracy };
-      }
-      const saved = await saveEvent({ user_id: user.id, recorded_at: new Date().toISOString(), event_type: type, lat: location?.lat ?? null, lng: location?.lng ?? null, accuracy: location?.accuracy ?? null });
-      if (location) setPosition(location);
-      setLastSaved(saved.recorded_at);
-      if (type !== 'ping') {
-        duty.current = type === 'clock_in'; setOnDuty(duty.current);
-        localStorage.setItem(storageKey, String(duty.current));
-      }
-      setMessage(type === 'clock_in' ? 'تم حفظ بدء الشيفت على الهاتف' : type === 'clock_out' ? 'تم حفظ الانصراف وإيقاف التتبع' : 'تم حفظ الموقع على الهاتف');
-      await sync();
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'تعذر حفظ الحدث؛ حاول مرة أخرى'); }
-    finally { capturing.current = false; setBusy(false); }
-  }, [user.id, storageKey, sync]);
-  useEffect(() => {
-    if (!ready || !onDuty) return;
-    // Resuming a page only records a ping; it never creates a second clock-in.
-    const timer = setInterval(() => void capture('ping'), Math.max(15, settings?.ping_interval_secs || 60) * 1000);
-    const visible = () => { if (document.visibilityState === 'visible') void capture('ping'); };
-    document.addEventListener('visibilitychange', visible);
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', visible); };
-  }, [ready, onDuty, settings?.ping_interval_secs, capture]);
-  const geo = position && settings ? verifiedBranchLocation(position.lat, position.lng, position.accuracy, settings) : null;
-  const locationName = geo?.branch_name || 'لم يتم التقاط الموقع بعد';
-  const metrics = report ? [
-    ['حضور داخل الفروع', report.summary.totalFormatted], ['عمل خلال الشيفت', report.summary.regularFormatted],
-    ['إضافي بعد الشيفت', report.summary.overtimeFormatted], ['خارج الفروع', report.summary.outsideFormatted],
-    ['فجوات التتبع', report.summary.unknownFormatted], ['عدد مرات الخروج', String(report.exitCount)],
-  ] : [];
-  return <div className="app-container employee-app">
-    <div className="tracker-greeting"><div><p className="eyebrow">الحضور الذكي · بتوقيت القاهرة</p><h2>مرحبًا، {user.name}</h2><p className="muted">الشيفت: {user.shift_start || '10:00'} — {user.shift_end || '22:00'}</p></div><ShieldCheck size={30} color="#0f766e" /></div>
-    <div className={`connection-banner ${online ? '' : 'offline'}`}><span>{online ? <Wifi size={18}/> : <WifiOff size={18}/>} {online ? 'متصل بالإنترنت' : 'بدون إنترنت · التسجيل مستمر على الهاتف'}</span><strong>{queued} أحداث بانتظار المزامنة</strong></div>
-    <section className="card shift-card"><p className="eyebrow">حالة الشيفت</p><h1>{onDuty ? 'الشيفت شغّال' : 'جاهز تبدأ يومك؟'}</h1><p className="location-label"><MapPin size={20}/>{locationName}</p>
-      <button className={`btn shift-button ${onDuty ? 'stop' : ''}`} disabled={!ready || busy} onClick={() => void capture(onDuty ? 'clock_out' : 'clock_in')}>{onDuty ? <Square size={20}/> : <Play size={20}/>} {busy ? 'جاري الحفظ…' : onDuty ? 'إنهاء الشيفت وتسجيل انصراف' : 'بدء الشيفت وتسجيل حضور'}</button>
-      <button className="btn btn-secondary" disabled={!onDuty || busy} onClick={() => void capture('ping')}><RefreshCw size={16}/>تحديث موقعي</button>
-      <p className="muted">{position ? `دقة GPS: ±${Math.round(position.accuracy)} متر` : 'الحضور يبدأ بعد التقاط موقعك وحفظ الحدث'}</p>
-      {lastSaved && <p className="muted">آخر حفظ محلي: {new Date(lastSaved).toLocaleTimeString('ar-EG', {timeZone:'Africa/Cairo'})}</p>}
-      {message && <p role="status" className="tracker-message">{message}</p>}
-      {syncError && <p role="alert" className="tracker-warning">{syncError} · {queued ? 'الأحداث ما زالت محفوظة على الهاتف' : ''}</p>}
-    </section>
-    <section className="card"><div className="section-title"><h3><Clock size={19}/> ملخص اليوم</h3><button className="btn btn-secondary btn-sm" onClick={() => void sync()}><RefreshCw size={15}/>مزامنة</button></div>
-      {report && <p className={`badge ${report.punctuality.badgeClass}`}>{report.punctuality.message}</p>}
-      <div className="metrics-grid">{metrics.map(([name,value]) => <div className="metric" key={name}><span>{name}</span><strong>{value}</strong></div>)}</div>
-      {report?.timeline.map((interval, i) => <div className="movement-row" key={i}><span>{interval.branch_name}</span><span>{new Date(interval.start).toLocaleTimeString('ar-EG',{timeZone:'Africa/Cairo',hour:'2-digit',minute:'2-digit'})} · {interval.durationFormatted}</span></div>)}
-      {queued > 0 && <p className="muted">الملخص يعرض ما وصل للسيرفر؛ الأحداث المحفوظة تظهر بعد المزامنة.</p>}
-    </section>
-    <p className="tracker-note">نسخة المتصفح تسجل الموقع أثناء فتحها. للتتبع مع قفل الشاشة استخدم تطبيق الهاتف واسمح بالموقع أثناء الشيفت. انقطاع GPS يظهر كفجوة تتبع.</p>
-  </div>;
+    check();const timer=setInterval(check,1000);return()=>{clearInterval(timer);if(watch!==undefined)navigator.geolocation?.clearWatch(watch);};
+  },[ready,enabled,windows,settings?.ping_interval_secs,user.id,refresh]);
+  const geo=position&&settings?verifiedBranchLocation(position.lat,position.lng,position.accuracy,settings):null;
+  const current=windows.find(w=>now>=w.start&&now<w.end),next=windows.find(w=>w.start>now);
+  return <div className="app-container employee-app"><div className="tracker-greeting"><div><p className="eyebrow">الحضور بالكارت · بتوقيت القاهرة</p><h2>مرحبًا، {user.name}</h2></div><ShieldCheck/></div>
+    <section className="card shift-card"><h2>سجّل الحضور والانصراف بكارتك في الفرع</h2><p>زر التتبع لا يسجل حضورًا أو انصرافًا. قراءة الكارت هي السجل الأساسي، وGPS لمتابعة الخروج داخل الشيفت فقط.</p><p><MapPin size={18}/>{tracking?geo?.branch_name||'التقاط الموقع أثناء الشيفت':'جمع الموقع متوقف'}</p>
+      <button className="btn btn-primary" disabled={!ready} onClick={()=>{const value=!enabled;setEnabled(value);localStorage.setItem(key,String(value));setMessage(value?'المتابعة مفعّلة داخل مواعيد الشيفت فقط':'تم إيقاف جمع الموقع؛ الحضور والانصراف بالكارت');}}>{enabled?'إيقاف متابعة الموقع':'تفعيل متابعة الموقع خلال الشيفت'}</button>
+      <button className="btn btn-secondary" onClick={()=>void refresh()}><RefreshCw size={16}/>مزامنة وتحديث</button>
+      <p className="muted">{current?'نهاية متابعة الموقع: '+new Date(current.end).toLocaleTimeString('ar-EG',{timeZone:'Africa/Cairo'}):next?'الشيفت القادم: '+new Date(next.start).toLocaleString('ar-EG',{timeZone:'Africa/Cairo'}):'لا توجد مواعيد محفوظة؛ اتصل بالإنترنت لتحديث الجدول'}</p><p>{queued} تحديثات موقع بانتظار المزامنة</p>{message&&<p role="status">{message}</p>}
+    </section><section className="card"><h3>ملخص الحضور بالكارت</h3><p>{report?.punctuality.message}</p>{report?.missingCheckout&&<p className="tracker-warning">ينقص انصراف الكارت؛ {report.provisionalMinutes} دقيقة مبدئية تنتظر اعتماد الانصراف.</p>}<div className="metrics-grid">{[['الحضور المؤكد',report?.summary.totalFormatted],['الإضافي بالكارت',report?.summary.overtimeFormatted],['خروج أثناء الشيفت',report?.summary.outsideFormatted],['فجوات GPS',report?.summary.unknownFormatted]].map(([label,value])=><div className="metric" key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section><p className="tracker-note">المتصفح يجمع الموقع أثناء فتحه. للتتبع مع قفل الشاشة استخدم تطبيق الهاتف المحدّث. خارج وقت الشيفت يتوقف GPS حتى لو التفعيل ما زال شغّالًا.</p></div>;
 }
