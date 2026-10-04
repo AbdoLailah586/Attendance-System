@@ -3,8 +3,6 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <LittleFS.h>
-#include <Wire.h>
-#include <RTClib.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
 #include <time.h>
@@ -16,12 +14,11 @@
 #endif
 
 HardwareSerial reader(2);
-RTC_DS3231 rtc;
 SemaphoreHandle_t diskLock;
-bool diskReady=false,rtcReady=false;
+bool diskReady=false;
 String lastCard;
-unsigned long lastCardSeen=0,ledUntil=0;
-bool storageFault=false;
+unsigned long lastCardSeen=0,ledAt=0;
+bool storageFault=false,ledActive=false;
 
 String eventUuid(){
   uint8_t bytes[16];esp_fill_random(bytes,sizeof(bytes));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
@@ -44,7 +41,7 @@ void saveTap(const String& card){
   storageFault=!ok;
   Serial.printf("Card %s: %s%s\n",card.c_str(),ok?"SAVED ":"NOT SAVED - STORAGE ERROR ",ok?id.c_str():"");
   if(!captured)Serial.println("Capture time unknown: server will keep this tap for administrator review.");
-  if(ok)ledUntil=millis()+200;
+  if(ok){ledAt=millis();ledActive=true;}
 }
 int nibble(char c){if(c>='0'&&c<='9')return c-'0';if(c>='A'&&c<='F')return c-'A'+10;if(c>='a'&&c<='f')return c-'a'+10;return -1;}
 void readCards(){
@@ -68,14 +65,17 @@ void readCards(){
   }
 }
 void uploadTask(void*){
-  unsigned long ntpUpdated=0;
+  unsigned long reconnectAttempt=millis();
+  bool clockAnnounced=false;
   for(;;){
-    if(WiFi.status()!=WL_CONNECTED||strlen(DEVICE_ID)!=36||strlen(DEVICE_TOKEN)!=43){vTaskDelay(pdMS_TO_TICKS(3000));continue;}
-    time_t current=utcNow();
-    if(current&&millis()-ntpUpdated>60000){
-      xSemaphoreTake(diskLock,portMAX_DELAY);if(rtcReady)rtc.adjust(DateTime((uint32_t)current));xSemaphoreGive(diskLock);ntpUpdated=millis();
+    if(WiFi.status()!=WL_CONNECTED){
+      if(millis()-reconnectAttempt>=15000){WiFi.reconnect();reconnectAttempt=millis();}
+      vTaskDelay(pdMS_TO_TICKS(3000));continue;
     }
+    time_t current=utcNow();
     if(!current){vTaskDelay(pdMS_TO_TICKS(3000));continue;} // TLS needs a valid clock.
+    if(!clockAnnounced){Serial.println("Clock synchronized from Internet. Timed capture and HTTPS upload ready.");clockAnnounced=true;}
+    if(strlen(DEVICE_ID)!=36||strlen(DEVICE_TOKEN)!=43){vTaskDelay(pdMS_TO_TICKS(3000));continue;}
     JsonDocument request;request["device_id"]=DEVICE_ID;JsonArray events=request["events"].to<JsonArray>();
     xSemaphoreTake(diskLock,portMAX_DELAY);
     File directory=diskReady?LittleFS.open("/queue"):File();
@@ -108,19 +108,18 @@ void setup(){
   Serial.begin(115200);pinMode(STATUS_LED,OUTPUT);diskLock=xSemaphoreCreateMutex();
   diskReady=LittleFS.begin(false); // Never autoformat and lose queued taps.
   if(diskReady)LittleFS.mkdir("/queue");else{storageFault=true;Serial.println("LittleFS unavailable. Format only a NEW device with the explicit --format command.");}
-  Wire.begin(RTC_SDA,RTC_SCL);rtcReady=rtc.begin();
-  if(rtcReady&&!rtc.lostPower()){
-    time_t initial=rtc.now().unixtime();if(initial>1700000000){struct timeval tv={initial,0};settimeofday(&tv,nullptr);}
-  }
   reader.setRxBufferSize(2048);reader.begin(9600,SERIAL_8N1,RFID_RX,-1);
   WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
   configTime(0,0,"time.google.com","pool.ntp.org");
   xTaskCreatePinnedToCore(uploadTask,"upload",16384,nullptr,1,nullptr,0);
-  Serial.println("Reader ready. Attendance is classified on the server using each employee's policy.");
+  Serial.println("Reader ready; waiting for Internet time. Untimed taps are saved for review, never assigned a guessed time.");
+  if(strlen(DEVICE_ID)!=36||strlen(DEVICE_TOKEN)!=43)Serial.println("Configure this branch DEVICE_ID and DEVICE_TOKEN before installation.");
 }
 void loop(){
   readCards();
-  digitalWrite(STATUS_LED,storageFault?(millis()/150)%2:millis()<ledUntil);
+  unsigned long now=millis();
+  if(ledActive&&now-ledAt>=200)ledActive=false; // Safe across millis() rollover during continuous operation.
+  digitalWrite(STATUS_LED,storageFault?(now/150)%2:!utcNow()?(now/500)%2:ledActive?HIGH:WiFi.status()!=WL_CONNECTED&&now%2000<50);
   if(Serial.available()){String command=Serial.readStringUntil('\n');command.trim();
     if(command=="--format"){xSemaphoreTake(diskLock,portMAX_DELAY);LittleFS.end();bool ok=LittleFS.format();diskReady=ok&&LittleFS.begin(false);if(diskReady)LittleFS.mkdir("/queue");storageFault=!diskReady;xSemaphoreGive(diskLock);Serial.println(diskReady?"Formatted. Existing queue erased.":"Format failed.");}
   }
