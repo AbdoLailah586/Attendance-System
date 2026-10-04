@@ -846,7 +846,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
 
             <button
               type="submit"
-              disabled={savingSettings}
+              disabled={savingSettings || !settings}
               className="btn btn-primary btn-lg"
               style={{ width: '100%', maxWidth: '300px' }}
             >
