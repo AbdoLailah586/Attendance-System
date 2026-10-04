@@ -18,7 +18,7 @@ async function send(device,events,token=device.token){return call('/api/nfc/even
 try{
  assert.ok(process.env.DATABASE_URL,'DB access required to clean only isolated QA fixtures');
  const login=await call('/api/auth/login',null,{username:process.env.QA_ADMIN_USERNAME,password:process.env.QA_ADMIN_PASSWORD});assert.equal(login.status,200);admin=login.body.token;
- const health=(await call('/api/health')).body;const settings=(await call('/api/settings',admin)).body.settings;assert.equal(settings.attendance_mode,'nfc');pass('Production deployed card attendance mode');
+ const health=(await call('/api/health')).body;const settings=(await call('/api/settings',admin)).body.settings;assert.equal(settings.attendance_mode,'nfc');if(settings.daily_flow_enabled_at)throw new Error('Daily flow deployed: use scripts/verify-daily-flow-production.mjs');pass('Production deployed card attendance mode');
  const now=new Date(),shiftStartDate=new Date(+now-60*60000),shiftDay=date(shiftStartDate),start=time(shiftStartDate),end=time(new Date(+shiftStartDate+9*3600000));
  const username='qa_card_'+randomBytes(5).toString('hex'),password=randomBytes(12).toString('hex');
  const made=await call('/api/users',admin,{username,password,name:'اختبار كارت مؤقت',shift_start:start,shift_end:end,attendance_start_date:shiftDay,work_days:[0,1,2,3,4,5,6]});assert.equal(made.status,200);const user=made.body.user;ids.push(user.id);

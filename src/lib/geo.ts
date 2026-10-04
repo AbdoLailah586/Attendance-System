@@ -2,6 +2,10 @@
 
 export interface Branch { id: string; name: string; lat: number; lng: number; radius: number; is_active?: boolean }
 export interface StoreSettings {
+  business_day_start_time?: string;
+  max_tracking_hours?: number;
+  scan_debounce_secs?: number;
+  daily_flow_enabled_at?: string;
   attendance_mode?: string;
   nfc_enabled_at?: string;
   attendance_reset_at?: string | null;

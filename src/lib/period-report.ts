@@ -5,7 +5,7 @@ import type { AppUser } from './types';
 
 export type ReportMode = 'daily' | 'weekly' | 'monthly' | 'custom';
 export interface EmployeePolicy {
-  user_id:number; effective_from:string; shift_start:string; shift_end:string;
+  attendance_open_time?:string|null; checkout_open_time?:string|null; max_tracking_hours?:number|null; user_id:number; effective_from:string; shift_start:string; shift_end:string;
   work_days:number[]; cycle_start_day:number; role:string; is_active:boolean; grace_period_mins:number; nfc_in_before?:number; nfc_in_after?:number; nfc_out_before?:number; nfc_out_after?:number;
 }
 export function addDays(day:string, count:number) {
@@ -31,7 +31,7 @@ export function rangeDays(start:string,end:string) {
 }
 export function policyOn(user:AppUser, policies:EmployeePolicy[], day:string):EmployeePolicy {
   return [...policies].filter(p=>p.effective_from<=day).sort((a,b)=>b.effective_from.localeCompare(a.effective_from))[0] || {
-    nfc_in_before:user.nfc_in_before,nfc_in_after:user.nfc_in_after,nfc_out_before:user.nfc_out_before,nfc_out_after:user.nfc_out_after,user_id:user.id,effective_from:'1900-01-01',shift_start:user.shift_start||'10:00',shift_end:user.shift_end||'22:00',
+    attendance_open_time:user.attendance_open_time,checkout_open_time:user.checkout_open_time,max_tracking_hours:user.max_tracking_hours,nfc_in_before:user.nfc_in_before,nfc_in_after:user.nfc_in_after,nfc_out_before:user.nfc_out_before,nfc_out_after:user.nfc_out_after,user_id:user.id,effective_from:'1900-01-01',shift_start:user.shift_start||'10:00',shift_end:user.shift_end||'22:00',
     work_days:user.work_days||[0,1,2,3,4,5,6],cycle_start_day:user.cycle_start_day||1,role:user.role,is_active:user.is_active!==false,grace_period_mins:user.grace_period_mins??30,
   };
 }
@@ -46,9 +46,10 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
   const days=rangeDays(start,end).map(date=>{
     const policy=policyOn(user,policies,date),window=dayWindow(date,policy),shift=shiftWindow(date,policy.shift_start,policy.shift_end);
     const before=sorted.filter(l=>new Date(l.timestamp)<window.start),last=before.at(-1),control=before.filter(l=>['clock_in','clock_out'].includes(l.event_type)).at(-1);
-    const current=sorted.filter(l=>l.source==='nfc'?(typeof l.shift_day==='string'?l.shift_day.slice(0,10):l.shift_day?localDate(new Date(l.shift_day)):null)===date:new Date(l.timestamp)>=window.start&&new Date(l.timestamp)<window.end);
+    const current=sorted.filter(l=>l.shift_day?(typeof l.shift_day==='string'?l.shift_day.slice(0,10):l.shift_day?localDate(new Date(l.shift_day)):null)===date:new Date(l.timestamp)>=window.start&&new Date(l.timestamp)<window.end);
     const carried=[last,control].filter((l):l is AttendanceLog=>Boolean(l));
-    const data=buildReport(policy,[...new Map([...carried,...current].map(l=>[l.id,l])).values()],{...settings,grace_period_mins:policy.grace_period_mins},date,window.start,window.end,now);
+    const extra=sorted.filter(l=>l.event_type==='ping'&&!l.shift_day);
+    const data=buildReport(policy,[...new Map([...carried,...current,...extra].map(l=>[l.id,l])).values()],{...settings,grace_period_mins:policy.grace_period_mins},date,window.start,window.end,now);
     const eligible=date>=begins&&policy.role==='employee'&&policy.is_active;
     const scheduled=eligible&&policy.work_days.includes(new Date(date+'T12:00:00Z').getUTCDay());
     const finished=now>=shift.end;
@@ -56,10 +57,10 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
     return {date,policy,scheduled,finished,status,...data,logCount:current.length,lateMinutes:data.punctuality.status==='late'?Math.max(0,data.punctuality.diffMinutes):0};
   });
   const branchTotals:Record<string,number>={};
-  let regular=0,overtime=0,outside=0,unknown=0,total=0;
+  let regular=0,overtime=0,outside=0,unknown=0,total=0,card=0;
   for(const d of days){
     const shift=shiftWindow(d.date,d.policy.shift_start,d.policy.shift_end);
-    if(d.attendanceSource==='nfc'){total+=d.summary.totalMinutes;regular+=d.summary.regularMinutes;overtime+=d.summary.overtimeMinutes;}
+    if(d.attendanceSource==='nfc'){card+=d.summary.cardMinutes;total+=d.summary.totalMinutes;regular+=d.summary.regularMinutes;overtime+=d.summary.overtimeMinutes;}
     for(const t of d.timeline){
       if(t.branch_id==='outside')outside+=t.durationMinutes;
       else if(t.branch_id==='unknown')unknown+=t.durationMinutes;
@@ -81,7 +82,7 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
     offDays:days.filter(d=>d.status==='off').length,pendingDays:days.filter(d=>d.status==='pending').length,
     unverifiedDays:days.filter(d=>d.status==='unverified').length,untrackedDays:days.filter(d=>d.status==='untracked').length,
     lateDays:days.filter(d=>d.status==='present'&&d.lateMinutes>0).length,
-    late:duration(days.reduce((s,d)=>s+d.lateMinutes,0)),total:duration(total),regular:duration(regular),overtime:duration(overtime),outside:duration(outside),unknown:duration(unknown),
+    card:duration(card),late:duration(days.reduce((s,d)=>s+d.lateMinutes,0)),total:duration(total),regular:duration(regular),overtime:duration(overtime),outside:duration(outside),unknown:duration(unknown),
     earlyDeparture:duration(days.reduce((s,d)=>s+d.summary.earlyDepartureMinutes,0)),exitCount:days.reduce((s,d)=>s+d.exitCount,0),
     branches:allIds.map(id=>({id,name:branchNames[id]||id,...duration(branchTotals[id]||0)})),
   }};

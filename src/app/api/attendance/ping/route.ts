@@ -3,9 +3,9 @@ import { getPool } from '@/lib/db';
 import { getActiveSession } from '@/lib/auth';
 import { verifiedBranchLocation } from '@/lib/geo';
 import { loadSettings } from '@/lib/schema';
-import {scheduleWindows,inTrackingWindow} from '@/lib/tracking-window';
+import {cardWindowsSql} from '@/lib/card-day';
 import type {AppUser} from '@/lib/types';
-import type {EmployeePolicy} from '@/lib/period-report';
+
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TYPES = new Set(['ping', 'clock_in', 'clock_out']);
@@ -43,7 +43,8 @@ export async function POST(req: NextRequest) {
       await client.query('BEGIN');
       const reset = (await client.query("SELECT attendance_reset_at FROM settings WHERE id='main' FOR SHARE")).rows[0]?.attendance_reset_at;
       const user=(await client.query<AppUser>("SELECT *,to_char(attendance_start_date,'YYYY-MM-DD') AS attendance_start_date FROM users WHERE id=$1",[session.id])).rows[0];
-      const policies=(await client.query<EmployeePolicy>("SELECT *,to_char(effective_from,'YYYY-MM-DD') AS effective_from FROM employee_policies WHERE user_id=$1",[session.id])).rows;
+      const rows=(await client.query(cardWindowsSql,[session.id,user.max_tracking_hours??settings.max_tracking_hours??12,new Date(now-32*86400000),new Date(now+120000)])).rows;
+      const windows=rows.map(r=>({day:r.day,start:+new Date(r.start),end:+new Date(r.finish)}));
       const acknowledgements = [];
       let latest;
       let location;
@@ -56,22 +57,19 @@ export async function POST(req: NextRequest) {
         if(settings.attendance_mode==='nfc'&&event.event_type!=='ping'){
           acknowledgements.push({client_event_id:event.client_event_id,discarded:true,reason:'nfc_required'});continue;
         }
-        const windows=scheduleWindows(user,policies,new Date(event.time));
+
         const window=windows.find(w=>event.time>=w.start&&event.time<w.end);
-        if(!inTrackingWindow(windows,event.time)){
-          acknowledgements.push({client_event_id:event.client_event_id,discarded:true,reason:'outside_shift'});continue;
+        if(!window){
+          acknowledgements.push({client_event_id:event.client_event_id,discarded:true,reason:'outside_card_session'});continue;
         }
-        const out=window?(await client.query("SELECT timestamp FROM attendance_logs WHERE user_id=$1 AND source='nfc' AND shift_day=$2 AND event_type='clock_out'",[session.id,window.day])).rows[0]:null;
-        if(out&&event.time>=+new Date(out.timestamp)){
-          acknowledgements.push({client_event_id:event.client_event_id,discarded:true,reason:'after_nfc_checkout'});continue;
-        }
+
         const geo = event.lat == null ? null : verifiedBranchLocation(event.lat, event.lng, event.accuracy, settings);
         const branch = geo?.branch_id || 'unknown';
         const result = await client.query(`INSERT INTO attendance_logs
-          (user_id, timestamp, branch_id, lat, lng, accuracy, distance_branch1, distance_branch2, event_type, client_event_id, received_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+          (user_id, timestamp, branch_id, lat, lng, accuracy, distance_branch1, distance_branch2, event_type, client_event_id, received_at, shift_day)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),$11)
           ON CONFLICT (user_id, client_event_id) DO NOTHING RETURNING *`,
-          [session.id, new Date(event.time).toISOString(), branch, event.lat, event.lng, event.accuracy, geo?.distance1 ?? null, geo?.distance2 ?? null, event.event_type, event.client_event_id]);
+          [session.id, new Date(event.time).toISOString(), branch, event.lat, event.lng, event.accuracy, geo?.distance1 ?? null, geo?.distance2 ?? null, event.event_type, event.client_event_id,window.day]);
         acknowledgements.push({ client_event_id: event.client_event_id, duplicate: !result.rows.length });
         latest = result.rows[0] || latest;
         location = { ...geo, branch_id: branch, branch_name: branch === 'unknown' ? 'موقع غير مؤكد' : geo?.branch_name };

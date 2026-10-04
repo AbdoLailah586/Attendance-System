@@ -7,13 +7,13 @@ function shiftDay(log:AttendanceLog){return typeof log.shift_day==='string'?log.
 export interface AttendanceLog {
   id: number; timestamp: string | Date; branch_id: string; event_type: string;
   lat?: number; lng?: number; accuracy?: number; received_at?: string; client_event_id?: string;
-  source?: string; shift_day?: string | Date; nfc_scan_id?: number;
+  tracking_deadline?:string|Date; source?: string; shift_day?: string | Date; nfc_scan_id?: number;
 }
 export interface AttendanceReport {
   attendanceSource:string;missingCheckout:boolean;missingArrival:boolean;provisionalMinutes:number;
   hasLogs:boolean;logCount:number;firstArrival:string|null;lastDeparture:string|null;onDuty:boolean;exitCount:number;
   punctuality:ReturnType<typeof evaluatePunctuality>;
-  summary:{totalMinutes:number;totalFormatted:string;branch1Minutes:number;branch1Formatted:string;branch2Minutes:number;branch2Formatted:string;outsideMinutes:number;outsideFormatted:string;unknownMinutes:number;unknownFormatted:string;regularMinutes:number;regularFormatted:string;overtimeMinutes:number;overtimeFormatted:string;earlyDepartureMinutes:number;earlyDepartureFormatted:string;branches:{id:string;name:string;minutes:number;formatted:string}[]};
+  summary:{cardMinutes:number;cardFormatted:string;totalMinutes:number;totalFormatted:string;branch1Minutes:number;branch1Formatted:string;branch2Minutes:number;branch2Formatted:string;outsideMinutes:number;outsideFormatted:string;unknownMinutes:number;unknownFormatted:string;regularMinutes:number;regularFormatted:string;overtimeMinutes:number;overtimeFormatted:string;earlyDepartureMinutes:number;earlyDepartureFormatted:string;branches:{id:string;name:string;minutes:number;formatted:string}[]};
   timeline:{branch_id:string;branch_name:string;start:string;end:string;durationMinutes:number;durationFormatted:string}[];
 }
 
@@ -90,7 +90,7 @@ export function buildReport(
     firstArrival, lastDeparture, onDuty, exitCount,
     punctuality: evaluatePunctuality(firstArrival, user.shift_start || settings.shift_start_time, settings.grace_period_mins, shift.start),
     summary: {
-      totalMinutes: minutes(total), totalFormatted: formatDurationArabic(total),
+      cardMinutes:0,cardFormatted:formatDurationArabic(0),totalMinutes: minutes(total), totalFormatted: formatDurationArabic(total),
       branch1Minutes: minutes(totals.branch1), branch1Formatted: formatDurationArabic(totals.branch1),
       branch2Minutes: minutes(totals.branch2), branch2Formatted: formatDurationArabic(totals.branch2),
       outsideMinutes: minutes(totals.outside), outsideFormatted: formatDurationArabic(totals.outside),
@@ -108,21 +108,22 @@ function cardReport(user:{shift_start?:string;shift_end?:string},logs:Attendance
   const cards=logs.filter(l=>l.source==='nfc'&&shiftDay(l)===day&&new Date(l.timestamp)<=now).sort((a,b)=>+new Date(a.timestamp)-+new Date(b.timestamp)||a.id-b.id);
   const arrival=cards.find(l=>l.event_type==='clock_in'),departure=cards.find(l=>l.event_type==='clock_out');
   const firstArrival=arrival?new Date(arrival.timestamp).toISOString():null,lastDeparture=departure?new Date(departure.timestamp).toISOString():null;
-  const start=arrival?+new Date(arrival.timestamp):+shift.start,end=departure?+new Date(departure.timestamp):Math.min(+now,+shift.end);
-  const from=Math.max(start,+shift.start),to=Math.max(from,Math.min(end,+shift.end,+now));
+  const start=arrival?+new Date(arrival.timestamp):+shift.start;
+  const deadline=arrival?.tracking_deadline?+new Date(arrival.tracking_deadline):start+(settings.max_tracking_hours??12)*3600000;
+  const end=departure?+new Date(departure.timestamp):Math.min(+now,deadline);
+  const from=start,to=Math.max(from,Math.min(end,deadline,+now));
   const gps=logs.filter(l=>l.event_type==='ping'&&l.source!=='nfc'&&+new Date(l.timestamp)>=from&&+new Date(l.timestamp)<to);
   const controls:AttendanceLog[]=arrival?[{id:-2,timestamp:new Date(from),branch_id:'unknown',event_type:'clock_in',client_event_id:'gps-evidence'},...gps,{id:Number.MAX_SAFE_INTEGER,timestamp:new Date(to),branch_id:'unknown',event_type:'clock_out',client_event_id:'gps-evidence'}]:[];
   const evidence=buildReport(user,controls,{...settings,attendance_mode:'gps'},day,new Date(from),new Date(to),now);
   const validPair=Boolean(arrival&&departure&&end>=start);
   const total=validPair?(end-start)/60000:0;
-  const regular=validPair?Math.max(0,Math.min(end,+shift.end)-Math.max(start,+shift.start))/60000:0;
-  const overtime=validPair?Math.max(0,end-Math.max(start,+shift.end))/60000:0;
+
   const early=validPair?Math.max(0,(+shift.end-end)/60000):0;
   return {...evidence,attendanceSource:'nfc',hasLogs:cards.length>0||gps.length>0,logCount:cards.length+gps.length,
-    firstArrival,lastDeparture,onDuty:Boolean(arrival&&!departure&&now<shift.end),
+    firstArrival,lastDeparture,onDuty:Boolean(arrival&&!departure&&+now<deadline),
     missingCheckout:Boolean(arrival&&!departure),missingArrival:Boolean(departure&&!arrival)||Boolean(arrival&&departure&&end<start),
     provisionalMinutes:arrival&&!departure?Math.round(Math.max(0,end-start)/60000):0,
     punctuality:evaluatePunctuality(firstArrival,user.shift_start||settings.shift_start_time,settings.grace_period_mins,shift.start),
-    summary:{...evidence.summary,totalMinutes:Math.round(total),totalFormatted:formatDurationArabic(total),regularMinutes:Math.round(regular),regularFormatted:formatDurationArabic(regular),overtimeMinutes:Math.round(overtime),overtimeFormatted:formatDurationArabic(overtime),earlyDepartureMinutes:Math.round(early),earlyDepartureFormatted:formatDurationArabic(early)},
+    summary:{...evidence.summary,cardMinutes:Math.round(total),cardFormatted:formatDurationArabic(total),earlyDepartureMinutes:Math.round(early),earlyDepartureFormatted:formatDurationArabic(early)},
   };
 }

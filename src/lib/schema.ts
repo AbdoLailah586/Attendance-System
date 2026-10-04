@@ -4,6 +4,7 @@ import type { StoreSettings,Branch } from './geo';
 let migration: Promise<unknown> | undefined;
 export function ensureAttendanceSchema() {
   if (!migration) migration = query(`
+    SELECT pg_advisory_xact_lock(hashtext('attendance-schema'));
     ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS client_event_id UUID;
     ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
     UPDATE attendance_logs SET received_at=timestamp WHERE received_at IS NULL;
@@ -73,6 +74,34 @@ export function ensureAttendanceSchema() {
       id BIGSERIAL PRIMARY KEY, scan_id BIGINT NOT NULL REFERENCES nfc_scans(id), admin_id INTEGER NOT NULL REFERENCES users(id),
       previous_data JSONB NOT NULL, new_data JSONB NOT NULL, note TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS business_day_start_time VARCHAR(5) NOT NULL DEFAULT '10:00';
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS max_tracking_hours INTEGER NOT NULL DEFAULT 12;
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS scan_debounce_secs INTEGER NOT NULL DEFAULT 30;
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS daily_flow_enabled_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS attendance_open_time VARCHAR(5);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS checkout_open_time VARCHAR(5);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS max_tracking_hours INTEGER;
+    ALTER TABLE employee_policies ADD COLUMN IF NOT EXISTS attendance_open_time VARCHAR(5);
+    ALTER TABLE employee_policies ADD COLUMN IF NOT EXISTS checkout_open_time VARCHAR(5);
+    ALTER TABLE employee_policies ADD COLUMN IF NOT EXISTS max_tracking_hours INTEGER;
+    ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS tracking_deadline TIMESTAMPTZ;
+    ALTER TABLE nfc_scans ADD COLUMN IF NOT EXISTS business_day DATE;
+    ALTER TABLE nfc_scans ADD COLUMN IF NOT EXISTS flow_version INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE nfc_scans ADD COLUMN IF NOT EXISTS day_rule JSONB;
+    CREATE TABLE IF NOT EXISTS nfc_day_rules (
+      user_id INTEGER NOT NULL REFERENCES users(id), business_day DATE NOT NULL,
+      day_start TIMESTAMPTZ NOT NULL, day_end TIMESTAMPTZ NOT NULL,
+      shift_day DATE NOT NULL, shift_start TIMESTAMPTZ NOT NULL, shift_end TIMESTAMPTZ NOT NULL,
+      attendance_open TIMESTAMPTZ NOT NULL, checkout_open TIMESTAMPTZ NOT NULL,
+      max_tracking_hours INTEGER NOT NULL, debounce_secs INTEGER NOT NULL,
+      PRIMARY KEY(user_id,business_day)
+    );
+    CREATE INDEX IF NOT EXISTS nfc_scans_business_day ON nfc_scans(user_id,business_day,recorded_at);
+    CREATE TABLE IF NOT EXISTS nfc_day_rule_history (
+      id BIGSERIAL PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),business_day DATE NOT NULL,
+      effective_at TIMESTAMPTZ NOT NULL,rules JSONB NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS nfc_day_rule_history_lookup ON nfc_day_rule_history(user_id,business_day,effective_at DESC);
   `).catch(error => { migration = undefined; throw error; });
   return migration;
 }

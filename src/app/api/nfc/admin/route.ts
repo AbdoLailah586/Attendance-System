@@ -5,6 +5,7 @@ import {getPool,query} from '@/lib/db';
 import {ensureAttendanceSchema} from '@/lib/schema';
 import {cardUid,tokenHash,uuid} from '@/lib/nfc';
 import {validDay} from '@/lib/time';
+import {businessDay,ensureDay,reconcileDay} from '@/lib/card-day';
 export async function GET(req:NextRequest){
   if((await getActiveSession(req))?.role!=='admin')return NextResponse.json({error:'صلاحيات المدير مطلوبة'},{status:403});
   try{
@@ -17,7 +18,7 @@ export async function GET(req:NextRequest){
     }
     const p=req.nextUrl.searchParams,page=Math.max(1,Number(p.get('page'))||1);
     if(!Number.isInteger(page)||page>100000)return NextResponse.json({error:'صفحة غير صالحة'},{status:400});
-    const filter=p.get('review')==='true'?"AND s.status NOT IN ('accepted','duplicate_action','ignored','before_start')":'';
+    const filter=p.get('review')==='true'?"AND s.status NOT IN ('accepted','rapid_repeat','after_checkout','duplicate_action','ignored','before_start')":'';
     const [devices,cards,scans,count,branches]=await Promise.all([
       query('SELECT id,name,branch_id,is_active,last_seen_at,created_at FROM nfc_devices ORDER BY created_at'),
       query('SELECT c.*,u.name,u.username FROM nfc_cards c JOIN users u ON u.id=c.user_id WHERE revoked_at IS NULL ORDER BY c.id'),
@@ -64,19 +65,29 @@ export async function POST(req:NextRequest){
         const deviceId=(await client.query('SELECT device_id FROM nfc_scans WHERE id=$1',[b.id])).rows[0]?.device_id;
         if(!deviceId){await client.query('ROLLBACK');return NextResponse.json({error:'القراءة غير موجودة'},{status:404});}
         await client.query('SELECT id FROM nfc_devices WHERE id=$1 FOR UPDATE',[deviceId]);
-        const settings=(await client.query("SELECT attendance_reset_at FROM settings WHERE id='main' FOR SHARE")).rows[0];
+        const settings=(await client.query("SELECT * FROM settings WHERE id='main' FOR SHARE")).rows[0];
         const old=(await client.query('SELECT * FROM nfc_scans WHERE id=$1 FOR UPDATE',[b.id])).rows[0];
         const time=b.recorded_at===undefined?old.recorded_at:new Date(b.recorded_at);
         if(b.event_type!=='ignored'){
           if(!Number.isInteger(b.user_id)||!validDay(b.shift_day)||!time||!Number.isFinite(+new Date(time))||+new Date(time)>Date.now()+120000||+new Date(time)<+new Date(settings.attendance_reset_at)||!(await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[b.user_id])).rows.length){await client.query('ROLLBACK');return NextResponse.json({error:'الموظف ويوم الشيفت ووقت القراءة غير صالحين'},{status:400});}
-          const conflict=await client.query("SELECT id FROM attendance_logs WHERE source='nfc' AND user_id=$1 AND shift_day=$2 AND event_type=$3 AND nfc_scan_id<>$4",[b.user_id,b.shift_day,b.event_type,b.id]);
-          if(conflict.rows.length){await client.query('ROLLBACK');return NextResponse.json({error:'يوجد سجل من نفس النوع لهذا الشيفت؛ تجاهله أولًا لتصحيح القراءة'},{status:409});}
+          const conflict=await client.query("SELECT l.id,s.reviewed_by,s.flow_version FROM attendance_logs l JOIN nfc_scans s ON s.id=l.nfc_scan_id WHERE l.source='nfc' AND l.user_id=$1 AND l.shift_day=$2 AND l.event_type=$3 AND l.nfc_scan_id<>$4",[b.user_id,b.shift_day,b.event_type,b.id]);
+          if(conflict.rows.some(s=>s.reviewed_by||s.flow_version!==2)){await client.query('ROLLBACK');return NextResponse.json({error:'يوجد قرار يدوي من نفس النوع؛ تجاهله أولًا لتصحيح القراءة'},{status:409});}
+          if(conflict.rows.length)await client.query('DELETE FROM attendance_logs WHERE id=ANY($1::bigint[])',[conflict.rows.map(s=>s.id)]);
         }
         await client.query('DELETE FROM attendance_logs WHERE source=\'nfc\' AND nfc_scan_id=$1',[b.id]);
         if(b.event_type!=='ignored')await client.query(`INSERT INTO attendance_logs(user_id,timestamp,branch_id,event_type,client_event_id,source,shift_day,nfc_scan_id) VALUES($1,$2,$3,$4,$5,'nfc',$6,$7)`,[b.user_id,time,old.branch_id,b.event_type,old.event_id,b.shift_day,b.id]);
         const next={status:b.event_type==='ignored'?'ignored':'accepted',user_id:b.user_id||old.user_id,event_type:b.event_type==='ignored'?null:b.event_type,shift_day:b.shift_day||null,recorded_at:time};
         await client.query('UPDATE nfc_scans SET status=$1,user_id=$2,event_type=$3,shift_day=$4,recorded_at=$5,reviewed_by=$6,review_note=$7,reviewed_at=NOW() WHERE id=$8',[next.status,next.user_id,next.event_type,next.shift_day,next.recorded_at,admin.id,b.note.trim(),b.id]);
         await client.query('INSERT INTO nfc_review_audit(scan_id,admin_id,previous_data,new_data,note) VALUES($1,$2,$3,$4,$5)',[b.id,admin.id,JSON.stringify(old),JSON.stringify(next),b.note.trim()]);
+        if(time&&+new Date(time)>=+new Date(settings.daily_flow_enabled_at)&&next.user_id){
+          const day=businessDay(new Date(time),settings.business_day_start_time);
+          const user=(await client.query('SELECT * FROM users WHERE id=$1',[next.user_id])).rows[0];
+          const policies=(await client.query("SELECT *,to_char(effective_from,'YYYY-MM-DD') AS effective_from FROM employee_policies WHERE user_id=$1",[next.user_id])).rows;
+          await ensureDay(client,user,policies,day,settings);
+          await client.query('UPDATE nfc_scans SET business_day=$2,flow_version=2 WHERE id=$1',[b.id,day]);
+          if(old.business_day&&old.user_id)await reconcileDay(client,old.user_id,new Date(old.business_day).toISOString().slice(0,10));
+          await reconcileDay(client,next.user_id,day);
+        }
       }else{await client.query('ROLLBACK');return NextResponse.json({error:'عملية غير صالحة'},{status:400});}
       await client.query('COMMIT');return NextResponse.json({success:true});
     }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}

@@ -26,9 +26,11 @@ export async function PUT(req: NextRequest) {
       if (/^branch[12]_(lat|lng|radius)$/.test(key) && (typeof value!=='number'||!Number.isFinite(value))) return NextResponse.json({error:'إحداثيات الفرع غير صالحة'},{status:400});
       if (key.endsWith('_lat') && Math.abs(Number(value))>90 || key.endsWith('_lng') && Math.abs(Number(value))>180 || key.endsWith('_radius') && (!Number.isInteger(value)||Number(value)<10||Number(value)>5000)) return NextResponse.json({error:'إحداثيات الفرع أو نطاقه غير صالح'},{status:400});
       if (key.endsWith('_name') && (typeof value!=='string'||!value.trim()||value.length>100)) return NextResponse.json({error:'اسم الفرع غير صالح'},{status:400});
-      if (['shift_start_time','shift_end_time'].includes(key) && (typeof value!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(value))) return NextResponse.json({error:'موعد الشيفت غير صالح'},{status:400});
+      if (['shift_start_time','shift_end_time','business_day_start_time'].includes(key) && (typeof value!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(value))) return NextResponse.json({error:'موعد الشيفت غير صالح'},{status:400});
       if (key==='grace_period_mins' && (!Number.isInteger(value)||Number(value)<0||Number(value)>180) || key==='ping_interval_secs' && (!Number.isInteger(value)||Number(value)<15||Number(value)>300)) return NextResponse.json({error:'فترة السماح أو التحديث غير صالحة'},{status:400});
     }
+    if(body.max_tracking_hours!==undefined&&(!Number.isInteger(body.max_tracking_hours)||body.max_tracking_hours<1||body.max_tracking_hours>36))return NextResponse.json({error:'Tracking hours: 1–36'},{status:400});
+    if(body.scan_debounce_secs!==undefined&&(!Number.isInteger(body.scan_debounce_secs)||body.scan_debounce_secs<5||body.scan_debounce_secs>300))return NextResponse.json({error:'Repeat interval: 5–300 seconds'},{status:400});
     await loadSettings();
     const {
       branch1_name,
@@ -59,6 +61,9 @@ export async function PUT(req: NextRequest) {
            shift_end_time = COALESCE($10, shift_end_time),
            grace_period_mins = COALESCE($11, grace_period_mins),
            ping_interval_secs = COALESCE($12, ping_interval_secs),
+           business_day_start_time=COALESCE($13,business_day_start_time),
+           max_tracking_hours=COALESCE($14,max_tracking_hours),
+           scan_debounce_secs=COALESCE($15,scan_debounce_secs),
            updated_at = NOW()
        WHERE id = 'main'
        RETURNING *;`,
@@ -74,13 +79,17 @@ export async function PUT(req: NextRequest) {
         shift_start_time,
         shift_end_time,
         grace_period_mins,
-        ping_interval_secs,
+        ping_interval_secs,body.business_day_start_time,body.max_tracking_hours,body.scan_debounce_secs,
       ]
     );
 
     for (const id of ['branch1','branch2']) {
       const s=res.rows[0];
       await query('UPDATE branches SET name=$1,lat=$2,lng=$3,radius=$4 WHERE id=$5', [s[`${id}_name`],s[`${id}_lat`],s[`${id}_lng`],s[`${id}_radius`],id]);
+    }
+    if(body.max_tracking_hours!==undefined){
+      await query('UPDATE nfc_day_rules r SET max_tracking_hours=COALESCE(u.max_tracking_hours,$1) FROM users u WHERE r.user_id=u.id AND r.day_end>NOW()',[body.max_tracking_hours]);
+      await query("UPDATE attendance_logs i SET tracking_deadline=i.timestamp+(COALESCE(u.max_tracking_hours,$1)::int*INTERVAL '1 hour') FROM users u WHERE i.user_id=u.id AND i.source='nfc' AND i.event_type='clock_in' AND i.timestamp>NOW()-INTERVAL '36 hours'",[body.max_tracking_hours]);
     }
     return NextResponse.json({
       success: true,

@@ -101,7 +101,7 @@ final class TrackingStore extends SQLiteOpenHelper {
     }
     synchronized void setSchedule(JSONObject schedule) throws Exception {
         JSONArray windows=schedule.getJSONArray("windows");
-        if(!prefs.edit().putString("windows",windows.toString()).putLong("schedule_until",schedule.getLong("valid_until")).commit())throw new Exception("Cannot save schedule");
+        if(!prefs.edit().putString("windows",windows.toString()).putLong("schedule_until",schedule.getLong("valid_until")).putInt("ping_secs",schedule.optInt("ping_interval_secs",60)).commit())throw new Exception("Cannot save schedule");
     }
     synchronized boolean hasSchedule(){return prefs.getLong("schedule_until",0)>System.currentTimeMillis();}
     synchronized long windowEnd(){

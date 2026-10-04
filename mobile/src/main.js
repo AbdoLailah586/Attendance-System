@@ -31,16 +31,16 @@ function draw() {
   }
   const s = summary?.summary;
   app.innerHTML = `<header><span class="logo small">📍</span><div><small>الحضور الذكي · بتوقيت القاهرة</small><h2>${escape(state.user.name)}</h2></div></header>
-    <div class="connection"><span>${state.tracking?'GPS داخل الشيفت شغّال':state.active?'المتابعة مفعّلة؛ GPS متوقف خارج الشيفت':'التتبع متوقف'}</span><strong>${state.pending} أحداث محفوظة</strong></div>
-    <section class="card center"><p>${escape(state.user.shift_start||'10:00')} — ${escape(state.user.shift_end||'22:00')}</p><h1>${'الحضور والانصراف بالكارت'}</h1><p>${escape(state.locationLabel || 'الموقع يُلتقط أثناء الشيفت')}</p>
-      ${state.user.role==='employee'?`<button id="toggle" class="${state.active?'danger':''}" ${working?'disabled':''}>${working?'جاري الحفظ…':state.active?'إيقاف متابعة الموقع':'تفعيل متابعة الموقع أثناء الشيفت'}</button>`:'<button id="admin">فتح لوحة الأدمين</button>'}
+    <div class="connection"><span>${state.tracking?'GPS بين الحضور والانصراف شغّال':state.active?'المتابعة جاهزة؛ GPS ينتظر حضور الكارت':'التتبع متوقف'}</span><strong>${state.pending} أحداث محفوظة</strong></div>
+    <section class="card center"><p>${escape(state.user.shift_start||'10:00')} — ${escape(state.user.shift_end||'22:00')}</p><h1>${'الحضور والانصراف بالكارت'}</h1><p>${escape(state.locationLabel || 'الموقع يُلتقط بعد حضور الكارت')}</p>
+      ${state.user.role==='employee'?`<button id="toggle" class="${state.active?'danger':''}" ${working?'disabled':''}>${working?'جاري الحفظ…':state.active?'إيقاف متابعة الموقع':'تجهيز متابعة الموقع بعد حضور الكارت'}</button>`:'<button id="admin">فتح لوحة الأدمين</button>'}
       <button id="sync" class="secondary" ${working?'disabled':''}>مزامنة وتحديث</button><p class="message" role="status">${escape(message || state.error)}</p></section>
-    <section class="card"><h3>ملخص اليوم</h3><p>${escape(summary?.punctuality?.message||'الملخص يظهر بعد المزامنة')}</p><div class="metrics">${[['الحضور المؤكد بالكارت',s?.totalFormatted],['إضافي بعد الشيفت',s?.overtimeFormatted],['خارج الفروع',s?.outsideFormatted],['فجوات التتبع',s?.unknownFormatted]].map(([name,value])=>`<div><small>${name}</small><strong>${escape(value||'—')}</strong></div>`).join('')}</div></section>
-    <section class="note">الحضور والانصراف الأساسيان بالكارت في الفرع. GPS يعمل خلال مواعيد الشيفت فقط لمتابعة الخروج، ويتوقف عند نهايته أو عند وصول انصراف الكارت. ساعات الشيفت المفتوح تنتظر قراءة الانصراف. على iPhone افتح التطبيق وفعّل المتابعة عند بداية كل شيفت؛ النظام لا يضمن تشغيل تطبيق مغلق تلقائيًا. اسمح بالموقع الدقيق، وعلى iPhone اختر «دائمًا» للاستمرار في الخلفية. لو التطبيق اتقفل إجباريًا أو الجهاز اتطفى، افتحه تاني لاستكمال التتبع.</section><button id="renew" class="secondary">تجديد تسجيل الدخول</button><button id="logout" class="secondary">تسجيل الخروج</button>`;
+    <section class="card"><h3>ملخص اليوم</h3><p>${escape(summary?.punctuality?.message||'الملخص يظهر بعد المزامنة')}</p><div class="metrics">${[['فترة الكارت المكتملة',s?.cardFormatted],['داخل الفروع حسب GPS',s?.totalFormatted],['إضافي بعد الشيفت',s?.overtimeFormatted],['خارج الفروع',s?.outsideFormatted],['فجوات التتبع',s?.unknownFormatted]].map(([name,value])=>`<div><small>${name}</small><strong>${escape(value||'—')}</strong></div>`).join('')}</div></section>
+    <section class="note">الحضور والانصراف الأساسيان بالكارت في الفرع. GPS يبدأ بعد وصول حضور الكارت ويتوقف عند وصول انصرافه أو الحد الأقصى بالساعات. الكارت وحده لا يثبت وجودك؛ الموقع غير المتاح يُحسب فجوة تتبع. ساعات الشيفت المفتوح تنتظر قراءة الانصراف. على iPhone افتح التطبيق وفعّل المتابعة قبل مسح الكارت؛ النظام لا يضمن تشغيل تطبيق مغلق تلقائيًا. اسمح بالموقع الدقيق، وعلى iPhone اختر «دائمًا» للاستمرار في الخلفية. لو التطبيق اتقفل إجباريًا أو الجهاز اتطفى، افتحه تاني لاستكمال التتبع.</section><button id="renew" class="secondary">تجديد تسجيل الدخول</button><button id="logout" class="secondary">تسجيل الخروج</button>`;
   const toggle = app.querySelector('#toggle');
   if (toggle) toggle.onclick = async () => {
     working=true;draw();
-    try {if(state.active)await Tracking.stop();else await Tracking.start();state=await Tracking.status();message=state.active?'تم تفعيل متابعة الموقع داخل الشيفت فقط':'تم إيقاف الموقع؛ سجّل الانصراف بالكارت';}
+    try {if(state.active)await Tracking.stop();else await Tracking.start();state=await Tracking.status();message=state.active?'المتابعة جاهزة؛ GPS يبدأ بعد وصول حضور الكارت':'تم إيقاف الموقع؛ سجّل الانصراف بالكارت';}
     catch(error){message=error.message;}finally{working=false;draw();}
     void refresh();
   };

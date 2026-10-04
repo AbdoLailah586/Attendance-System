@@ -15,6 +15,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
     private var queue: [[String: Any]] = []
     private var uploading = false
     private var fetchingSchedule = false
+    private var pollTimer: Timer?
     private var shiftStop: DispatchWorkItem?
     private var startCall: CAPPluginCall?
     private var timeout: DispatchWorkItem?
@@ -35,18 +36,18 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
     var allowed: Bool { windowEnd>0 && prefs.double(forKey:"attendance-schedule-until")>Date().timeIntervalSince1970*1000 }
     func setSchedule(_ value:String) throws {
         guard let bytes=value.data(using:.utf8),let schedule=(try JSONSerialization.jsonObject(with:bytes)) as? [String:Any],let windows=schedule["windows"] as? [[String:Any]],let until=schedule["valid_until"] as? Double else{throw problem("مواعيد الشيفت غير صالحة")}
-        prefs.set(try JSONSerialization.data(withJSONObject:windows),forKey:"attendance-windows");prefs.set(until,forKey:"attendance-schedule-until")
+        prefs.set(try JSONSerialization.data(withJSONObject:windows),forKey:"attendance-windows");prefs.set(until,forKey:"attendance-schedule-until");prefs.set(schedule["ping_interval_secs"] as? Int ?? 60,forKey:"attendance-ping-secs")
         if active { if allowed {resume()} else {pauseAtEnd()} }
     }
     private func pauseAtEnd(){
-        shiftStop?.cancel();prefs.set(false,forKey:"attendance-active");manager.stopUpdatingLocation();manager.stopMonitoringSignificantLocationChanges();if startCall != nil {failStart("انتهى وقت متابعة الشيفت")}
+        shiftStop?.cancel();manager.stopUpdatingLocation();manager.stopMonitoringSignificantLocationChanges()
     }
     private func refreshSchedule(){
         guard !fetchingSchedule && !token().isEmpty else{return};fetchingSchedule=true
         var request=URLRequest(url:URL(string:"https://attendance-system-joe-2026.vercel.app/api/attendance/tracking-window")!);request.timeoutInterval=15;request.setValue("Bearer \(token())",forHTTPHeaderField:"Authorization")
         URLSession.shared.dataTask(with:request){data,response,error in DispatchQueue.main.async {
             self.fetchingSchedule=false
-            if (response as? HTTPURLResponse)?.statusCode==401 {self.pauseAtEnd();return}
+            if (response as? HTTPURLResponse)?.statusCode==401 {self.prefs.set(false,forKey:"attendance-active");self.pauseAtEnd();return}
             guard error==nil,(response as? HTTPURLResponse)?.statusCode==200,let data=data,let text=String(data:data,encoding:.utf8) else{return}
             try? self.setSchedule(text)
         }}.resume()
@@ -71,6 +72,9 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
             }
         } catch { queueError = "تعذر قراءة الأحداث المحفوظة؛ افتح التطبيق بعد فتح قفل الهاتف" }
         if active && manager.authorizationStatus == .authorizedAlways { resume() }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            guard let self = self, self.active else {return};self.refreshSchedule()
+        }
     }
     private var keyQuery: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "joestore.attendance", kSecAttrAccount as String: "session"]
@@ -121,7 +125,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         try persist(queue + [event])
     }
     func start(_ call: CAPPluginCall) {
-        guard allowed else {call.reject("GPS متاح داخل الشيفت فقط؛ حدّث المواعيد وفعّله عند البداية");return}
+        guard prefs.double(forKey:"attendance-schedule-until")>Date().timeIntervalSince1970*1000 else {call.reject("حدّث حالة الكارت قبل تفعيل المتابعة");return}
         guard startCall == nil else { call.reject("انتظر التقاط GPS"); return }
         guard user?["role"] as? String == "employee" else { call.reject("حساب موظف مطلوب"); return }
         if active { call.resolve(); return }
@@ -132,16 +136,20 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         switch manager.authorizationStatus {
         case .notDetermined: manager.requestWhenInUseAuthorization()
         case .authorizedWhenInUse: manager.requestAlwaysAuthorization()
-        case .authorizedAlways: resume()
+        case .authorizedAlways: finishArm()
         default: failStart("اسمح بالموقع دائمًا من إعدادات iPhone")
         }
+    }
+    private func finishArm(){
+        prefs.set(true,forKey:"attendance-active");prefs.set(Date().timeIntervalSince1970,forKey:"attendance-shift-started")
+        timeout?.cancel();let call=startCall;startCall=nil;resume();refreshSchedule();call?.resolve()
     }
     private func failStart(_ message: String) {
         timeout?.cancel(); startCall?.reject(message); startCall = nil
         if !active { manager.stopUpdatingLocation() }
     }
     func resume() {
-        guard allowed else {pauseAtEnd();return}
+        guard active && allowed && manager.authorizationStatus == .authorizedAlways else {pauseAtEnd();return}
         manager.startUpdatingLocation()
         shiftStop?.cancel();let deadline=windowEnd
         let work=DispatchWorkItem{[weak self] in self?.pauseAtEnd()};shiftStop=work
@@ -149,7 +157,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
     }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         if manager.authorizationStatus == .authorizedAlways {
-            if active { resume() } else if startCall != nil { resume() }
+            if startCall != nil {finishArm()} else if active {resume()}
         } else if manager.authorizationStatus == .authorizedWhenInUse && startCall != nil { manager.requestAlwaysAuthorization() }
         else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
             prefs.set("صلاحية الموقع متوقفة؛ توجد فجوة تتبع", forKey: "attendance-error")
@@ -166,7 +174,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
                 prefs.set(true, forKey: "attendance-active")
                 prefs.set(Date().timeIntervalSince1970, forKey: "attendance-shift-started")
                 timeout?.cancel(); startCall = nil; lastRecorded = Date(); resume(); call.resolve()
-            } else if active && Date().timeIntervalSince(lastRecorded) >= 50 {
+            } else if active && Date().timeIntervalSince(lastRecorded) >= Double(max(15,prefs.integer(forKey:"attendance-ping-secs"))) {
                 try record(type: "ping", location: fix); lastRecorded = Date()
             } else { return }
             sync()
@@ -192,7 +200,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         }
     }
     func status() -> [String: Any] {
-        ["user": user.map { $0 as Any } ?? NSNull(), "active": active, "tracking": active && allowed, "pending": queue.count,
+        ["user": user.map { $0 as Any } ?? NSNull(), "active": active, "tracking": active && allowed && manager.authorizationStatus == .authorizedAlways, "pending": queue.count,
          "error": queueError.isEmpty ? prefs.string(forKey: "attendance-error") ?? "" : queueError,
          "locationLabel": prefs.string(forKey: "attendance-location") ?? ""]
     }

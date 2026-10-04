@@ -6,14 +6,19 @@
 #include <ArduinoJson.h>
 #include <esp_system.h>
 #include <time.h>
+#include <SPI.h>
+#include <MFRC522.h>
 #include "certs.h"
 #if __has_include("attendance-config.h")
 #include "attendance-config.h"
 #else
 #include "config.example.h"
 #endif
-
-HardwareSerial reader(2);
+#include "display.h"
+MFRC522 reader(21,22);
+struct ScreenMessage {char event[37];char name[64];char action[32];};
+QueueHandle_t screenMessages;
+String lastTapId;
 SemaphoreHandle_t diskLock;
 bool diskReady=false;
 String lastCard;
@@ -42,27 +47,15 @@ void saveTap(const String& card){
   Serial.printf("Card %s: %s%s\n",card.c_str(),ok?"SAVED ":"NOT SAVED - STORAGE ERROR ",ok?id.c_str():"");
   if(!captured)Serial.println("Capture time unknown: server will keep this tap for administrator review.");
   if(ok){ledAt=millis();ledActive=true;}
+  lastTapId=id;lcdShow(card,ok?(captured?"SAVED / WAIT ACK":"SAVED / NO CLOCK"):"STORAGE ERROR");
 }
-int nibble(char c){if(c>='0'&&c<='9')return c-'0';if(c>='A'&&c<='F')return c-'A'+10;if(c>='a'&&c<='f')return c-'a'+10;return -1;}
 void readCards(){
-  static char frame[12];static int length=-1;static unsigned long started=0;
-  while(reader.available()){
-    char ch=reader.read();
-    if(ch==2){length=0;started=millis();continue;}
-    if(length>=0&&millis()-started>200){length=-1;continue;}
-    if(ch==3){
-      if(length==12){
-        int checksum=0;bool valid=true;
-        for(int i=0;i<12;i++)if(nibble(frame[i])<0)valid=false;
-        if(valid){for(int i=0;i<10;i+=2)checksum^=(nibble(frame[i])<<4)|nibble(frame[i+1]);valid=checksum==((nibble(frame[10])<<4)|nibble(frame[11]));}
-        if(valid){String card;for(int i=0;i<10;i++)card+=(char)toupper(frame[i]);
-          bool held=card==lastCard&&millis()-lastCardSeen<1000;lastCardSeen=millis();lastCard=card;if(!held)saveTap(card);
-        }else Serial.println("Invalid RFID checksum; ignored electrical noise.");
-      }
-      length=-1;continue;
-    }
-    if(length>=0){if(length<12)frame[length++]=ch;else length=-1;}
-  }
+  byte atqa[2],size=2;auto status=reader.PICC_WakeupA(atqa,&size);
+  if(status!=MFRC522::STATUS_OK&&status!=MFRC522::STATUS_COLLISION)return;
+  if(!reader.PICC_ReadCardSerial())return;
+  String card;char hex[3];for(byte i=0;i<reader.uid.size;i++){snprintf(hex,sizeof(hex),"%02X",reader.uid.uidByte[i]);card+=hex;}
+  bool held=card==lastCard&&millis()-lastCardSeen<1000;lastCard=card;lastCardSeen=millis();
+  reader.PICC_HaltA();reader.PCD_StopCrypto1();if(!held)saveTap(card);
 }
 void uploadTask(void*){
   unsigned long reconnectAttempt=millis();
@@ -96,7 +89,12 @@ void uploadTask(void*){
         xSemaphoreTake(diskLock,portMAX_DELAY);
         for(JsonObject ack:reply["acknowledged"].as<JsonArray>()){
           String id=ack["event_id"]|"";bool sent=false;for(JsonObject event:events)if(id==event["event_id"].as<String>())sent=true;
-          if(sent&&id.length()==36){LittleFS.remove("/queue/"+id+".json");Serial.printf("Server saved %s (%s)\n",id.c_str(),ack["status"]|"unknown");}
+          if(sent&&id.length()==36){LittleFS.remove("/queue/"+id+".json");Serial.printf("Server saved %s (%s)\n",id.c_str(),ack["status"]|"unknown");
+            ScreenMessage message{};strlcpy(message.event,id.c_str(),sizeof(message.event));strlcpy(message.name,ack["display_name"]|"Unknown card",sizeof(message.name));
+            String type=ack["event_type"]|"",state=ack["status"]|"";
+            const char* action=state=="accepted"?(type=="clock_in"?"IN / GPS PENDING":type=="clock_out"?"CHECK OUT":"REFRESH"):state=="rapid_repeat"?"REPEAT / REFRESH":state=="after_checkout"?"ALREADY OUT":"ADMIN REVIEW";
+            strlcpy(message.action,action,sizeof(message.action));xQueueSend(screenMessages,&message,0);
+          }
         }
         xSemaphoreGive(diskLock);
       }
@@ -108,7 +106,9 @@ void setup(){
   Serial.begin(115200);pinMode(STATUS_LED,OUTPUT);diskLock=xSemaphoreCreateMutex();
   diskReady=LittleFS.begin(false); // Never autoformat and lose queued taps.
   if(diskReady)LittleFS.mkdir("/queue");else{storageFault=true;Serial.println("LittleFS unavailable. Format only a NEW device with the explicit --format command.");}
-  reader.setRxBufferSize(2048);reader.begin(9600,SERIAL_8N1,RFID_RX,-1);
+  screenMessages=xQueueCreate(30,sizeof(ScreenMessage));lcdBegin();lcdShow("Attendance RC522","WAITING FOR WIFI");
+  SPI.begin(18,19,23,21);reader.PCD_Init();byte version=reader.PCD_ReadRegister(MFRC522::VersionReg);
+  if(version==0||version==0xFF){Serial.println("RC522 not detected; check 3.3V and SPI wiring.");lcdShow("RC522 ERROR","CHECK 3V3 / SPI");}
   WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
   configTime(0,0,"time.google.com","pool.ntp.org");
   xTaskCreatePinnedToCore(uploadTask,"upload",16384,nullptr,1,nullptr,0);
@@ -117,11 +117,12 @@ void setup(){
 }
 void loop(){
   readCards();
+  ScreenMessage screen;while(xQueueReceive(screenMessages,&screen,0)==pdTRUE)if(lastTapId==screen.event)lcdShow(screen.name,screen.action);
   unsigned long now=millis();
   if(ledActive&&now-ledAt>=200)ledActive=false; // Safe across millis() rollover during continuous operation.
   digitalWrite(STATUS_LED,storageFault?(now/150)%2:!utcNow()?(now/500)%2:ledActive?HIGH:WiFi.status()!=WL_CONNECTED&&now%2000<50);
   if(Serial.available()){String command=Serial.readStringUntil('\n');command.trim();
     if(command=="--format"){xSemaphoreTake(diskLock,portMAX_DELAY);LittleFS.end();bool ok=LittleFS.format();diskReady=ok&&LittleFS.begin(false);if(diskReady)LittleFS.mkdir("/queue");storageFault=!diskReady;xSemaphoreGive(diskLock);Serial.println(diskReady?"Formatted. Existing queue erased.":"Format failed.");}
   }
-  delay(2);
+  delay(30);
 }

@@ -21,6 +21,7 @@ import AttendanceMap from './AttendanceMap';
 import AttendanceLogViewer from './AttendanceLogViewer';
 import BranchManager from './BranchManager';
 import AttendanceReports from './AttendanceReports';
+import DayCloseReport from './DayCloseReport';
 import NfcManager from './NfcManager';
 import EmployeeEditor from './EmployeeEditor';
 import type { EmployeePolicy } from '@/lib/period-report';
@@ -569,7 +570,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
         </div>
       )}
 
-      {activeTab === 'reports' && <AttendanceReports users={usersList} refreshKey={reportRefresh} />}
+      {activeTab === 'reports' && <><DayCloseReport/><AttendanceReports users={usersList} refreshKey={reportRefresh} /></>}
 
       {/* TAB 3: SETTINGS & GEOFENCING */}
       {activeTab === 'settings' && (
@@ -820,6 +821,12 @@ export default function AdminDashboard({}: AdminDashboardProps) {
                 </div>
               </div>
 
+              <div className="report-filters">
+                <label>بداية يوم العمل / فتح الحضور<input className="form-input" type="time" required value={settingsForm.business_day_start_time||'10:00'} onChange={e=>setSettingsForm({...settingsForm,business_day_start_time:e.target.value})}/></label>
+                <label>الحد الأقصى لتتبع الموقع بالساعات<input className="form-input" type="number" min={1} max={36} required value={settingsForm.max_tracking_hours??12} onChange={e=>setSettingsForm({...settingsForm,max_tracking_hours:Number(e.target.value)})}/></label>
+                <label>مهلة منع الانصراف من إعادة مسح سريعة (ثوانٍ)<input className="form-input" type="number" min={5} max={300} required value={settingsForm.scan_debounce_secs??30} onChange={e=>setSettingsForm({...settingsForm,scan_debounce_secs:Number(e.target.value)})}/></label>
+              </div>
+              <p className="muted">أول قراءة في يوم العمل حضور. القراءات التالية Refresh حتى فتح الانصراف من بروفايل الموظف؛ بعدها أول قراءة انصراف. تغيير بداية اليوم يسري على الأيام الجديدة. تغيير حد الساعات يسري على المتابعة المفتوحة بعد وصوله للهاتف؛ إذا لم يصل بسبب انقطاع الشبكة يتوقف عند الحد المحفوظ على الجهاز.</p>
               <div className="form-group" style={{ marginTop: '12px', maxWidth: '340px' }}>
                 <label className="form-label">معدل الفحص وتحديث الموقع (بالثواني)</label>
                 <input
