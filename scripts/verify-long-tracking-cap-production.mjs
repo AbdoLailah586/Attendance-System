@@ -12,7 +12,7 @@ async function call(path,token,data,method=data?'POST':'GET'){
 try{
  const {token:admin}=await call('/api/auth/login',null,{username:process.env.QA_ADMIN_USERNAME,password:process.env.QA_ADMIN_PASSWORD});
  const username='qa_daily_long_'+randomBytes(5).toString('hex'),password=randomBytes(12).toString('hex');
- const {user}=await call('/api/users',admin,{username,password,name:'اختبار حد تتبع طويل مؤقت',shift_start:'12:00',shift_end:'21:00',max_tracking_hours:36});id=user.id;
+ const {user}=await call('/api/users',admin,{username,password,name:'اختبار حد تتبع طويل مؤقت',shift_start:'12:00',shift_end:'21:00',max_tracking_hours:36,attendance_start_date:new Date(Date.now()-86400000).toISOString().slice(0,10)});id=user.id;
  const {token}=await call('/api/auth/login',null,{username,password});const uid=randomBytes(4).toString('hex').toUpperCase();
  await call('/api/nfc/admin',admin,{action:'assign_card',uid,user_id:id});device=await call('/api/nfc/admin',admin,{action:'create_device',name:'QA long cap',branch_id:'branch1'});
  const captured=new Date();await call('/api/nfc/events',device.token,{device_id:device.device_id,events:[{event_id:randomUUID(),card_uid:uid,recorded_at:captured.toISOString()}]});

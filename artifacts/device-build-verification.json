@@ -1,0 +1,24 @@
+{
+  "createdAt": "2026-10-04T23:38:03.187Z",
+  "android": {
+    "version": "1.1.0",
+    "file": "artifacts/attendance-android-debug.apk",
+    "sha256": "619785daa8cdc4788069d075a13e92c4d4b06eff65917dd14841114a39ec1906",
+    "build": "Local Gradle BUILD SUCCESSFUL; existing local debug signing key"
+  },
+  "ios": {
+    "workflowRun": 37243840756,
+    "result": "success",
+    "target": "iOS simulator; unsigned for physical devices"
+  },
+  "firmware": {
+    "i2c": "esp32dev: successful",
+    "parallel": "esp32-parallel: successful",
+    "reader": "MFRC522 1.4.12 / SPI"
+  },
+  "longTrackingCap": {
+    "commit": "30a1eba8b362190b9e7420846c77f8efa8ef983e",
+    "productionResult": "passed; isolated fixtures cleaned"
+  },
+  "physicalTestsPerformed": false
+}
