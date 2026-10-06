@@ -8,6 +8,7 @@
 #include <time.h>
 #include <SPI.h>
 #include <MFRC522.h>
+#include <Preferences.h>
 #include "certs.h"
 #if __has_include("attendance-config.h")
 #include "attendance-config.h"
@@ -24,6 +25,95 @@ bool diskReady=false;
 String lastCard;
 unsigned long lastCardSeen=0,ledAt=0;
 bool storageFault=false,ledActive=false;
+constexpr const char* FIRMWARE_VERSION="1.2.1";
+String wifiSsid,wifiPassword,serialCommand;
+String idleScreenState;
+bool storedWifi=false,serialOverflow=false;
+byte readerVersion=0;
+void emitSerialJson(JsonDocument& document){
+  String line;serializeJson(document,line);line+='\n';
+  // A single UART write keeps upload-task log messages out of a JSON response.
+  Serial.write(reinterpret_cast<const uint8_t*>(line.c_str()),line.length());
+}
+void updateIdleScreen(){
+  if(lastTapId.length())return;
+  String state=!diskReady?"STORAGE ERROR":readerVersion==0||readerVersion==0xFF?"RC522 ERROR":
+    WiFi.status()!=WL_CONNECTED?"WAITING FOR WIFI":time(nullptr)<=1700000000?"SYNCING CLOCK":"READY / SCAN";
+  if(state!=idleScreenState){idleScreenState=state;lcdShow("Attendance RC522",state);}
+}
+
+bool validWifi(const String& ssid,const String& password){
+  if(ssid.length()==0||ssid.length()>32)return false;
+  for(size_t i=0;i<ssid.length();i++)if(ssid[i]=='\0')return false;
+  for(size_t i=0;i<password.length();i++)if(password[i]=='\0')return false;
+  if(password.length()==0)return true; // Open networks are supported explicitly.
+  if(password.length()>=8&&password.length()<=63)return true;
+  if(password.length()!=64)return false;
+  for(size_t i=0;i<password.length();i++)if(!isxdigit(static_cast<unsigned char>(password[i])))return false;
+  return true;
+}
+void loadWifi(){
+  wifiSsid=WIFI_SSID;wifiPassword=WIFI_PASSWORD;
+  Preferences preferences;
+  if(!preferences.begin("attendance",false))return;
+  String saved=preferences.getString("wifi","");preferences.end();
+  JsonDocument config;
+  if(saved.length()&&!deserializeJson(config,saved)&&config["device_id"].as<String>()==DEVICE_ID&&config["ssid"].is<String>()&&config["password"].is<String>()){
+    String ssid=config["ssid"].as<String>(),password=config["password"].as<String>();
+    if(validWifi(ssid,password)){wifiSsid=ssid;wifiPassword=password;storedWifi=true;}
+  }
+}
+void printStatus(){
+  JsonDocument status;status["command"]="status";status["firmware"]=FIRMWARE_VERSION;status["device_id"]=DEVICE_ID;
+  status["wifi_connected"]=WiFi.status()==WL_CONNECTED;status["wifi_source"]=storedWifi?"stored":"compiled";
+  if(WiFi.status()==WL_CONNECTED)status["rssi_dbm"]=WiFi.RSSI();
+  status["clock_ready"]=time(nullptr)>1700000000;status["storage_ready"]=diskReady;status["storage_fault"]=storageFault;
+  status["rc522_version"]=readerVersion;status["rc522_detected"]=readerVersion!=0&&readerVersion!=0xFF;
+  status["lcd_mode"]=LCD_MODE;status["lcd_ready"]=lcdReady;status["uptime_ms"]=millis();status["free_heap_bytes"]=ESP.getFreeHeap();
+  unsigned queued=0;xSemaphoreTake(diskLock,portMAX_DELAY);
+  File directory=diskReady?LittleFS.open("/queue"):File();
+  if(directory){File file=directory.openNextFile();while(file){if(String(file.name()).endsWith(".json"))queued++;file.close();file=directory.openNextFile();}directory.close();}
+  xSemaphoreGive(diskLock);status["queued_events"]=queued;emitSerialJson(status);
+}
+void handleSerialCommand(const String& command){
+  if(command=="--status"){printStatus();return;}
+  if(command=="--format"){
+    xSemaphoreTake(diskLock,portMAX_DELAY);LittleFS.end();bool ok=LittleFS.format();diskReady=ok&&LittleFS.begin(false);
+    if(diskReady)LittleFS.mkdir("/queue");storageFault=!diskReady;xSemaphoreGive(diskLock);
+    Serial.println(diskReady?"Formatted. Existing queue erased.":"Format failed.");return;
+  }
+  JsonDocument request,response;response["command"]="wifi_config";response["ok"]=false;
+  if(deserializeJson(request,command)||request["command"]!="wifi_config"){response["error"]="invalid_command";}
+  else if(request["device_id"].as<String>()!=DEVICE_ID){response["error"]="wrong_reader";}
+  else if(!request["ssid"].is<String>()||!request["password"].is<String>()){response["error"]="invalid_wifi";}
+  else{
+    String ssid=request["ssid"].as<String>(),password=request["password"].as<String>();
+    if(!validWifi(ssid,password))response["error"]="invalid_wifi";
+    else{
+      JsonDocument config;config["device_id"]=DEVICE_ID;config["ssid"]=ssid;config["password"]=password;String saved;serializeJson(config,saved);
+      Preferences preferences;bool persisted=false;
+      if(preferences.begin("attendance",false)){persisted=preferences.putString("wifi",saved)>0;preferences.end();}
+      if(!persisted)response["error"]="storage_failed";
+      else{
+        wifiSsid=ssid;wifiPassword=password;storedWifi=true;WiFi.disconnect(false,false);WiFi.begin(wifiSsid.c_str(),wifiPassword.c_str());
+        response["ok"]=true;lastTapId="";idleScreenState="";lcdShow("WIFI UPDATED","CONNECTING...");
+      }
+    }
+  }
+  // Never echo the command, SSID/password or API token to the serial console.
+  emitSerialJson(response);
+}
+void readSerialCommands(){
+  unsigned budget=128; // Keep card scanning responsive even during serial input.
+  while(Serial.available()&&budget--){
+    char next=Serial.read();if(next=='\r')continue;
+    if(next=='\n'){
+      if(serialOverflow)Serial.println("{\"command\":\"wifi_config\",\"ok\":false,\"error\":\"command_too_long\"}");
+      else if(serialCommand.length())handleSerialCommand(serialCommand);
+      serialCommand="";serialOverflow=false;
+    }else if(!serialOverflow){if(serialCommand.length()<768)serialCommand+=next;else{serialCommand="";serialOverflow=true;}}
+  }
+}
 
 String eventUuid(){
   uint8_t bytes[16];esp_fill_random(bytes,sizeof(bytes));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
@@ -107,12 +197,13 @@ void setup(){
   diskReady=LittleFS.begin(false); // Never autoformat and lose queued taps.
   if(diskReady)LittleFS.mkdir("/queue");else{storageFault=true;Serial.println("LittleFS unavailable. Format only a NEW device with the explicit --format command.");}
   screenMessages=xQueueCreate(30,sizeof(ScreenMessage));lcdBegin();lcdShow("Attendance RC522","WAITING FOR WIFI");
-  SPI.begin(18,19,23,21);reader.PCD_Init();byte version=reader.PCD_ReadRegister(MFRC522::VersionReg);
-  if(version==0||version==0xFF){Serial.println("RC522 not detected; check 3.3V and SPI wiring.");lcdShow("RC522 ERROR","CHECK 3V3 / SPI");}
-  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
+  SPI.begin(18,19,23,21);reader.PCD_Init();readerVersion=reader.PCD_ReadRegister(MFRC522::VersionReg);
+  if(readerVersion==0||readerVersion==0xFF){Serial.println("RC522 not detected; check 3.3V and SPI wiring.");lcdShow("RC522 ERROR","CHECK 3V3 / SPI");}
+  loadWifi();WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);WiFi.begin(wifiSsid.c_str(),wifiPassword.c_str());
   configTime(0,0,"time.google.com","pool.ntp.org");
   xTaskCreatePinnedToCore(uploadTask,"upload",16384,nullptr,1,nullptr,0);
   Serial.println("Reader ready; waiting for Internet time. Untimed taps are saved for review, never assigned a guessed time.");
+  Serial.printf("Firmware %s; USB Wi-Fi settings available.\n",FIRMWARE_VERSION);
   if(strlen(DEVICE_ID)!=36||strlen(DEVICE_TOKEN)!=43)Serial.println("Configure this branch DEVICE_ID and DEVICE_TOKEN before installation.");
 }
 void loop(){
@@ -121,8 +212,7 @@ void loop(){
   unsigned long now=millis();
   if(ledActive&&now-ledAt>=200)ledActive=false; // Safe across millis() rollover during continuous operation.
   digitalWrite(STATUS_LED,storageFault?(now/150)%2:!utcNow()?(now/500)%2:ledActive?HIGH:WiFi.status()!=WL_CONNECTED&&now%2000<50);
-  if(Serial.available()){String command=Serial.readStringUntil('\n');command.trim();
-    if(command=="--format"){xSemaphoreTake(diskLock,portMAX_DELAY);LittleFS.end();bool ok=LittleFS.format();diskReady=ok&&LittleFS.begin(false);if(diskReady)LittleFS.mkdir("/queue");storageFault=!diskReady;xSemaphoreGive(diskLock);Serial.println(diskReady?"Formatted. Existing queue erased.":"Format failed.");}
-  }
+  readSerialCommands();
+  updateIdleScreen();
   delay(30);
 }

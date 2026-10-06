@@ -1,5 +1,6 @@
 #pragma once
 // Copy to attendance-config.h, fill locally, and never commit real credentials.
+// Firmware 1.2.0: USB Wi-Fi settings saved in NVS override these boot defaults.
 static const char* WIFI_SSID = "SHOP_WIFI_2_4_GHZ";
 static const char* WIFI_PASSWORD = "REPLACE_LOCALLY";
 static const char* DEVICE_ID = "REPLACE_FROM_ADMIN";

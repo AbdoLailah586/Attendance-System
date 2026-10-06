@@ -47,3 +47,4 @@ firmware/**/.pio/
 firmware/**/include/config.h
 
 firmware/**/include/attendance-config.h
+scripts/__pycache__/

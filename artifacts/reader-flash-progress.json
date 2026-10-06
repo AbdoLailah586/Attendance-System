@@ -1,0 +1,59 @@
+{
+  "original_firmware_backup": {
+    "saved_outside_repo": true,
+    "sha256": "9F30CA1103E6AA7D61095AAED29F8638E2FD56ABB40B66E063A98D635FA04B04",
+    "bytes": 4194304,
+    "planned_littlefs_region_was_erased": true
+  },
+  "branch2": {
+    "flashed": false,
+    "private_config_ready": true
+  },
+  "employee_attendance_hardware_test_completed": false,
+  "status": "branch1_flashed_and_employee_clock_in_verified",
+  "mobile_location_hardware_test_completed": false,
+  "branch": "branch1",
+  "usb_wifi_update_tested": true,
+  "lcd": "i2c",
+  "firmware_version": "1.2.1",
+  "port": "COM10",
+  "upload_performed": true,
+  "wifi_persistence_after_reboot_and_firmware_update_tested": true,
+  "date": "2026-10-06",
+  "builds": {
+    "i2c": {
+      "success": true,
+      "flash_bytes": 1029521,
+      "ram_bytes": 47884
+    },
+    "parallel": {
+      "success": true,
+      "flash_bytes": 1013229,
+      "ram_bytes": 47548
+    }
+  },
+  "production": {
+    "registered_cards": 1,
+    "physical_scan_received": true,
+    "physical_scan_status": "unknown_card_then_accepted_clock_in",
+    "url": "https://attendance-system-joe-2026.vercel.app/",
+    "lcd_status_confirmed_by_user": true,
+    "scans": 2,
+    "clock_in_verified": true,
+    "clock_out_verified": false
+  },
+  "hardware": {
+    "clock_ready": true,
+    "storage_ready": true,
+    "rssi_dbm": -49,
+    "storage_fault": false,
+    "rc522_detected": true,
+    "wifi_connected": true,
+    "lcd_ready": true,
+    "queued_events": 0,
+    "free_heap_bytes": 214904,
+    "wifi_source": "stored"
+  },
+  "wrong_branch_guard_tested": true,
+  "upload_hash_verified": true
+}
