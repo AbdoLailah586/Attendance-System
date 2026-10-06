@@ -24,6 +24,7 @@
 
         </activity>
 
+        <activity android:name=".AdminActivity" android:exported="false" android:theme="@style/AppTheme.NoActionBar" android:configChanges="orientation|keyboardHidden|screenSize" />
         <service android:name=".TrackingService" android:exported="false" android:foregroundServiceType="location" android:stopWithTask="false" />
         <provider
             android:name="androidx.core.content.FileProvider"

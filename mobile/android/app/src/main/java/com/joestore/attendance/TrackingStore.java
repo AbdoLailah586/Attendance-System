@@ -33,6 +33,7 @@ final class TrackingStore extends SQLiteOpenHelper {
     final SharedPreferences prefs;
     final Context context;
     private final AtomicBoolean syncing = new AtomicBoolean(false);
+    private int sessionGeneration=0;
     private TrackingStore(Context context) {
         super(context, "attendance-events.db", null, 1);
         prefs = context.getSharedPreferences("attendance", Context.MODE_PRIVATE);
@@ -62,7 +63,11 @@ final class TrackingStore extends SQLiteOpenHelper {
         if ((active() || pending() > 0) && identity.getInt("id") != userId()) throw new Exception("زامن الأحداث وأنهِ الشيفت قبل تبديل الحساب");
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, key());
         String encrypted = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP) + ":" + Base64.encodeToString(cipher.doFinal(token.getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
-        if (!prefs.edit().putString("token", encrypted).putString("user", user).putString("error", "").commit()) throw new Exception("تعذر حفظ الجلسة");
+        SharedPreferences.Editor edit=prefs.edit().putString("token", encrypted).putString("user", user).putString("error", "");
+        if(identity.getInt("id")!=userId())edit.putString("windows","[]").putLong("schedule_until",0).remove("locationLabel").remove("last_ping_at").remove("last_sync_at");
+        if(!"employee".equals(identity.optString("role"))){edit.putBoolean("active",false).putString("windows","[]");context.stopService(new android.content.Intent(context,TrackingService.class));}
+        if (!edit.commit()) throw new Exception("تعذر حفظ الجلسة");
+        sessionGeneration++;
         scheduleSync();
     }
     synchronized String token() throws Exception {
@@ -86,7 +91,8 @@ final class TrackingStore extends SQLiteOpenHelper {
     }
     synchronized void record(String type, android.location.Location location) throws Exception {
         if (userId() == 0) throw new Exception("سجل الدخول أولًا");
-        long time = System.currentTimeMillis();
+        long time = location == null ? System.currentTimeMillis() : location.getTime();
+        if(location!=null&&!allowedAt(time))return;
         JSONObject event = new JSONObject();
         String id = UUID.randomUUID().toString();
         event.put("client_event_id", id); event.put("recorded_at", Instant.ofEpochMilli(time).toString()); event.put("event_type", type);
@@ -94,6 +100,7 @@ final class TrackingStore extends SQLiteOpenHelper {
         event.put("lng", location == null ? JSONObject.NULL : location.getLongitude());
         event.put("accuracy", location == null ? JSONObject.NULL : location.getAccuracy());
         getWritableDatabase().execSQL("INSERT INTO events(id,user_id,payload,time) VALUES(?,?,?,?)", new Object[]{id,userId(),event.toString(),time});
+        if(location!=null)prefs.edit().putLong("last_ping_at",time).putFloat("last_accuracy",location.getAccuracy()).apply();
         scheduleSync();
     }
     synchronized void recordPing(android.location.Location location) throws Exception {
@@ -104,22 +111,24 @@ final class TrackingStore extends SQLiteOpenHelper {
         if(!prefs.edit().putString("windows",windows.toString()).putLong("schedule_until",schedule.getLong("valid_until")).putInt("ping_secs",schedule.optInt("ping_interval_secs",60)).commit())throw new Exception("Cannot save schedule");
     }
     synchronized boolean hasSchedule(){return prefs.getLong("schedule_until",0)>System.currentTimeMillis();}
-    synchronized long windowEnd(){
-        try{JSONArray windows=new JSONArray(prefs.getString("windows","[]"));long now=System.currentTimeMillis();
-            for(int i=0;i<windows.length();i++){JSONObject w=windows.getJSONObject(i);if(now>=w.getLong("start")&&now<w.getLong("end"))return w.getLong("end");}
+    synchronized long windowEnd(){return windowEndAt(System.currentTimeMillis());}
+    synchronized long windowEndAt(long time){
+        try{JSONArray windows=new JSONArray(prefs.getString("windows","[]"));
+            for(int i=0;i<windows.length();i++){JSONObject w=windows.getJSONObject(i);if(time>=w.getLong("start")&&time<w.getLong("end"))return w.getLong("end");}
         }catch(Exception ignored){}return 0;
     }
     synchronized boolean allowed(){return hasSchedule()&&windowEnd()>0;}
+    synchronized boolean allowedAt(long time){return hasSchedule()&&time>0&&time<=System.currentTimeMillis()+10000&&windowEndAt(time)>0;}
     private final AtomicBoolean fetchingSchedule=new AtomicBoolean(false);
     void refreshSchedule(){
         if(!fetchingSchedule.compareAndSet(false,true))return;
         NETWORK.execute(()->{try{
-            String credential=token();if(credential.isEmpty())return;
+            String credential;int owner,generation;synchronized(this){credential=token();owner=userId();generation=sessionGeneration;}if(credential.isEmpty())return;
             HttpsURLConnection c=(HttpsURLConnection)new URL(API+"/api/attendance/tracking-window").openConnection();
             try{c.setConnectTimeout(10000);c.setReadTimeout(10000);c.setInstanceFollowRedirects(false);c.setRequestProperty("Authorization","Bearer "+credential);
-                int code=c.getResponseCode();if(code==401){prefs.edit().putString("windows","[]").apply();return;}if(code!=200)return;
+                int code=c.getResponseCode();if(code==401){synchronized(this){if(owner==userId()&&generation==sessionGeneration){prefs.edit().putString("windows","[]").apply();error("الجلسة تحتاج تجديدًا؛ سجل الدخول بنفس الحساب");}}return;}if(code!=200)return;
                 try(java.io.InputStream stream=c.getInputStream();java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream()){
-                    byte[] buffer=new byte[4096];int n;while((n=stream.read(buffer))!=-1)bytes.write(buffer,0,n);setSchedule(new JSONObject(bytes.toString(StandardCharsets.UTF_8.name())));
+                    byte[] buffer=new byte[4096];int n;while((n=stream.read(buffer))!=-1)bytes.write(buffer,0,n);synchronized(this){if(owner==userId()&&generation==sessionGeneration)setSchedule(new JSONObject(bytes.toString(StandardCharsets.UTF_8.name())));}
                 }
             }finally{c.disconnect();}
         }catch(Exception ignored){}finally{fetchingSchedule.set(false);}});
@@ -127,7 +136,9 @@ final class TrackingStore extends SQLiteOpenHelper {
     void error(String message) { prefs.edit().putString("error", message).apply(); }
     synchronized void logout() throws Exception {
         if (active() || pending() > 0) throw new Exception("أنهِ الشيفت وزامن الأحداث قبل تسجيل الخروج");
-        prefs.edit().clear().commit();
+        if(!prefs.edit().clear().commit())throw new Exception("تعذر مسح الجلسة المحلية");
+        sessionGeneration++;
+        android.webkit.CookieManager.getInstance().setCookie(API,"auth_token=; Max-Age=0; Path=/; Secure; HttpOnly");
     }
     void sync() {
         if (!syncing.compareAndSet(false,true)) return;
@@ -162,7 +173,7 @@ final class TrackingStore extends SQLiteOpenHelper {
                             SQLiteDatabase db=getWritableDatabase(); db.beginTransaction();
                             try { for(int i=0;i<accepted.length();i++) db.delete("events","id=? AND user_id=?",new String[]{accepted.getJSONObject(i).getString("client_event_id"),String.valueOf(owner)}); db.setTransactionSuccessful(); } finally {db.endTransaction();}
                             JSONObject geo=result.optJSONObject("location");
-                            if(geo!=null)prefs.edit().putString("locationLabel",geo.optString("branch_name", "")).apply();
+                            if(owner==userId()){SharedPreferences.Editor edit=prefs.edit().putLong("last_sync_at",System.currentTimeMillis());if(geo!=null)edit.putString("locationLabel",geo.optString("branch_name", ""));edit.apply();}
                         }
                         error("");
                     } finally { connection.disconnect(); }

@@ -1,0 +1,36 @@
+{
+  "physicalAndroidConnected": false,
+  "apk": "artifacts/attendance-android-v1.2.0.apk",
+  "features": [
+    "actual NFC arrival/departure window",
+    "native location foreground service",
+    "maximum hours cap",
+    "offline SQLite queue",
+    "unique event ACK synchronization",
+    "capture time GPS timestamps",
+    "precise location requirement",
+    "account isolation and stale schedule guards",
+    "cached offline dashboard",
+    "last GPS/accuracy/sync status",
+    "administrator WebView with CSV save picker"
+  ],
+  "version": "1.2.0",
+  "physicalAdminNavigationAndCsvSaveVerified": false,
+  "viteBuild": "success",
+  "clientDate": "2026-10-06",
+  "sha256": "343b4b7c704c4a6b618d9bda707fec3ae9af35e2438b0e7a61f4c1f667fab954",
+  "gradleAssembleDebug": "success",
+  "signatureVerified": true,
+  "androidLint": "passed with no errors",
+  "sameSigningKeyAsPreviousLocalApk": true,
+  "minAndroid": "8.0 (API 26)",
+  "physicalScreenLockGpsVerified": false,
+  "versionCode": 3,
+  "applicationId": "com.joestore.attendance",
+  "production": {
+    "isolatedFixturesCleaned": true,
+    "url": "https://attendance-system-joe-2026.vercel.app/",
+    "dailyFlowChecksPassed": 26
+  },
+  "bytes": 4588377
+}
