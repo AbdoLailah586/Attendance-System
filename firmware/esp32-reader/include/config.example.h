@@ -13,3 +13,11 @@ static const char* API_URL = "https://attendance-system-joe-2026.vercel.app/api/
 #endif
 #define LCD_I2C_ADDRESS 0x27
 constexpr int STATUS_LED = 2;
+// External indicators: green=13, red=14, yellow=33; buzzer driver signal=4.
+// Change these locally if needed; both LCD modes use the same free pins.
+#ifndef FEEDBACK_ARRIVAL_IS_RED
+#define FEEDBACK_ARRIVAL_IS_RED 0 // 0: green arrival/red departure; 1: reverse.
+#endif
+#ifndef BUZZER_PASSIVE
+#define BUZZER_PASSIVE 0 // 0: active buzzer through NPN; 1: passive at 2 kHz through NPN.
+#endif

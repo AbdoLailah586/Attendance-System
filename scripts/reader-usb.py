@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--expected-device")
     parser.add_argument("--apply-wifi", action="store_true")
     parser.add_argument("--initialize-new-storage", action="store_true")
+    parser.add_argument("--test-feedback", action="store_true")
     args = parser.parse_args()
     settings = json.load(sys.stdin) if args.apply_wifi else None
     port = serial.Serial()
@@ -52,6 +53,14 @@ def main():
         status = reply(port, "--status", "status")
         if args.expected_device and status.get("device_id") != args.expected_device:
             raise RuntimeError("Wrong branch reader connected. No settings changed.")
+        if args.test_feedback:
+            if not status.get("feedback_enabled"):
+                raise RuntimeError("Install firmware 1.3.0 with sound/light feedback enabled first.")
+            result = reply(port, "--feedback-test", "feedback_test")
+            if not result.get("ok"):
+                raise RuntimeError("Sound/light feedback is disabled on this reader.")
+            time.sleep(4)
+            status = reply(port, "--status", "status")
         if args.initialize_new_storage:
             if status.get("storage_ready"):
                 raise RuntimeError("Storage already mounted; refusing to format it.")

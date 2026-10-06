@@ -6,4 +6,6 @@
 
 Firmware 1.2.0 يدعم تغيير Wi-Fi عبر `configure-readers.cmd` وUSB بدون إعادة الرفع. راجع [دليل تشغيل الموظفين والكروت](OPERATOR-GUIDE.md) لخطوات الأدمين وربط UID بالموبايل أو القارئ.
 
+Firmware 1.3.0 يضيف [buzzer وثلاثة ليدات للحضور وRefresh والانصراف](BUZZER-LEDS.md)، مع اختيار Active/Passive واختبار مخارج مستقل.
+
 القارئ القديم RDM6300 ‏125kHz غير مستخدم في هذا الإصدار.

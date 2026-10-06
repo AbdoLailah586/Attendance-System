@@ -1,7 +1,9 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('branch1','branch2')][string]$Branch,
   [Parameter(Mandatory=$true)][ValidatePattern('^COM[0-9]+$')][string]$Port,
-  [ValidateSet('i2c','parallel')][string]$Lcd='i2c'
+  [ValidateSet('i2c','parallel')][string]$Lcd='i2c',
+  [ValidateSet('active','passive')][string]$Buzzer,
+  [ValidateSet('green','red')][string]$ArrivalLed
 )
 $ErrorActionPreference='Stop'
 $taskRepoRoot=Split-Path -Parent $PSScriptRoot
@@ -9,6 +11,17 @@ $taskPrivateConfig=Join-Path $env:LOCALAPPDATA "JoeStore\Attendance\ReaderConfig
 if(!(Test-Path -LiteralPath $taskPrivateConfig)){throw 'Private reader configuration missing; provision the reader from the admin panel first.'}
 $taskConfigText=Get-Content -LiteralPath $taskPrivateConfig -Raw
 if($taskConfigText -match 'SHOP_WIFI_2_4_GHZ|REPLACE_LOCALLY|REPLACE_FROM_ADMIN'){throw 'Fill Wi-Fi SSID/password and reader credentials in the private config first. Never publish this file.'}
+foreach($taskHardwareOption in @(
+  @{name='BUZZER_PASSIVE';selected=($null -ne $Buzzer -and $Buzzer -ne '');value=([int]($Buzzer -eq 'passive'))},
+  @{name='FEEDBACK_ARRIVAL_IS_RED';selected=($null -ne $ArrivalLed -and $ArrivalLed -ne '');value=([int]($ArrivalLed -eq 'red'))}
+)){
+  if(!$taskHardwareOption.selected){continue}
+  $taskHardwarePattern='(?m)^#define '+$taskHardwareOption.name+'\s+\d+[^\r\n]*'
+  $taskHardwareLine='#define '+$taskHardwareOption.name+' '+$taskHardwareOption.value
+  if([regex]::IsMatch($taskConfigText,$taskHardwarePattern)){$taskConfigText=[regex]::Replace($taskConfigText,$taskHardwarePattern,$taskHardwareLine)}
+  else{$taskConfigText+="`n$taskHardwareLine`n"}
+}
+if($Buzzer -or $ArrivalLed){[IO.File]::WriteAllText($taskPrivateConfig,$taskConfigText,[Text.UTF8Encoding]::new($false))}
 $taskLcdMode=if($Lcd -eq 'i2c'){1}else{2}
 $taskConfigText=$taskConfigText -replace '(?m)^#define LCD_MODE\s+\d+\s*$',"#define LCD_MODE $taskLcdMode"
 $taskConfigText+="`n#ifndef LCD_MODE`n#define LCD_MODE $taskLcdMode`n#endif`n"

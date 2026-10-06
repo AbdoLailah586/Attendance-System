@@ -16,8 +16,9 @@
 #include "config.example.h"
 #endif
 #include "display.h"
+#include "feedback.h"
 MFRC522 reader(21,22);
-struct ScreenMessage {char event[37];char name[64];char action[32];};
+struct ScreenMessage {char event[37];char name[64];char action[32];FeedbackResult feedback;};
 QueueHandle_t screenMessages;
 String lastTapId;
 SemaphoreHandle_t diskLock;
@@ -25,7 +26,7 @@ bool diskReady=false;
 String lastCard;
 unsigned long lastCardSeen=0,ledAt=0;
 bool storageFault=false,ledActive=false;
-constexpr const char* FIRMWARE_VERSION="1.2.1";
+constexpr const char* FIRMWARE_VERSION="1.3.0";
 String wifiSsid,wifiPassword,serialCommand;
 String idleScreenState;
 bool storedWifi=false,serialOverflow=false;
@@ -70,6 +71,8 @@ void printStatus(){
   status["clock_ready"]=time(nullptr)>1700000000;status["storage_ready"]=diskReady;status["storage_fault"]=storageFault;
   status["rc522_version"]=readerVersion;status["rc522_detected"]=readerVersion!=0&&readerVersion!=0xFF;
   status["lcd_mode"]=LCD_MODE;status["lcd_ready"]=lcdReady;status["uptime_ms"]=millis();status["free_heap_bytes"]=ESP.getFreeHeap();
+  status["feedback_enabled"]=FEEDBACK_ENABLED!=0;status["arrival_led"]=FEEDBACK_ARRIVAL_IS_RED?"red":"green";
+  status["buzzer_type"]=BUZZER_PASSIVE?"passive":"active";status["feedback_test_running"]=feedbackTesting;
   unsigned queued=0;xSemaphoreTake(diskLock,portMAX_DELAY);
   File directory=diskReady?LittleFS.open("/queue"):File();
   if(directory){File file=directory.openNextFile();while(file){if(String(file.name()).endsWith(".json"))queued++;file.close();file=directory.openNextFile();}directory.close();}
@@ -77,6 +80,9 @@ void printStatus(){
 }
 void handleSerialCommand(const String& command){
   if(command=="--status"){printStatus();return;}
+  if(command=="--feedback-test"){
+    feedbackStartTest();JsonDocument response;response["command"]="feedback_test";response["ok"]=FEEDBACK_ENABLED!=0;emitSerialJson(response);return;
+  }
   if(command=="--format"){
     xSemaphoreTake(diskLock,portMAX_DELAY);LittleFS.end();bool ok=LittleFS.format();diskReady=ok&&LittleFS.begin(false);
     if(diskReady)LittleFS.mkdir("/queue");storageFault=!diskReady;xSemaphoreGive(diskLock);
@@ -121,6 +127,7 @@ String eventUuid(){
 }
 time_t utcNow(){time_t value=time(nullptr);return value>1700000000?value:0;}
 void saveTap(const String& card){
+  feedbackCardRead(); // One immediate chirp per new UID read; held cards are suppressed upstream.
   JsonDocument event;String id=eventUuid();event["event_id"]=id;event["card_uid"]=card;
   time_t captured=utcNow();
   if(captured){char timestamp[25];struct tm utc;gmtime_r(&captured,&utc);strftime(timestamp,sizeof(timestamp),"%Y-%m-%dT%H:%M:%SZ",&utc);event["recorded_at"]=timestamp;}
@@ -134,6 +141,7 @@ void saveTap(const String& card){
   if(!ok&&diskReady)LittleFS.remove(temp);
   xSemaphoreGive(diskLock);
   storageFault=!ok;
+  if(!ok)feedbackShow(FeedbackResult::Review);
   Serial.printf("Card %s: %s%s\n",card.c_str(),ok?"SAVED ":"NOT SAVED - STORAGE ERROR ",ok?id.c_str():"");
   if(!captured)Serial.println("Capture time unknown: server will keep this tap for administrator review.");
   if(ok){ledAt=millis();ledActive=true;}
@@ -182,7 +190,10 @@ void uploadTask(void*){
           if(sent&&id.length()==36){LittleFS.remove("/queue/"+id+".json");Serial.printf("Server saved %s (%s)\n",id.c_str(),ack["status"]|"unknown");
             ScreenMessage message{};strlcpy(message.event,id.c_str(),sizeof(message.event));strlcpy(message.name,ack["display_name"]|"Unknown card",sizeof(message.name));
             String type=ack["event_type"]|"",state=ack["status"]|"";
-            const char* action=state=="accepted"?(type=="clock_in"?"IN / GPS PENDING":type=="clock_out"?"CHECK OUT":"REFRESH"):state=="rapid_repeat"?"REPEAT / REFRESH":state=="after_checkout"?"ALREADY OUT":"ADMIN REVIEW";
+            message.feedback=state=="accepted"?(type=="clock_in"?FeedbackResult::Arrival:type=="clock_out"?FeedbackResult::Departure:type=="refresh"?FeedbackResult::Refresh:FeedbackResult::Review):
+              state=="rapid_repeat"||state=="duplicate_action"?FeedbackResult::Refresh:state=="after_checkout"?FeedbackResult::AlreadyOut:FeedbackResult::Review;
+            const char* action=message.feedback==FeedbackResult::Arrival?"IN / GPS PENDING":message.feedback==FeedbackResult::Departure?"CHECK OUT":
+              message.feedback==FeedbackResult::Refresh?"ALREADY IN":message.feedback==FeedbackResult::AlreadyOut?"ALREADY OUT":"ADMIN REVIEW";
             strlcpy(message.action,action,sizeof(message.action));xQueueSend(screenMessages,&message,0);
           }
         }
@@ -194,6 +205,7 @@ void uploadTask(void*){
 }
 void setup(){
   Serial.begin(115200);pinMode(STATUS_LED,OUTPUT);diskLock=xSemaphoreCreateMutex();
+  feedbackBegin();
   diskReady=LittleFS.begin(false); // Never autoformat and lose queued taps.
   if(diskReady)LittleFS.mkdir("/queue");else{storageFault=true;Serial.println("LittleFS unavailable. Format only a NEW device with the explicit --format command.");}
   screenMessages=xQueueCreate(30,sizeof(ScreenMessage));lcdBegin();lcdShow("Attendance RC522","WAITING FOR WIFI");
@@ -208,11 +220,12 @@ void setup(){
 }
 void loop(){
   readCards();
-  ScreenMessage screen;while(xQueueReceive(screenMessages,&screen,0)==pdTRUE)if(lastTapId==screen.event)lcdShow(screen.name,screen.action);
+  ScreenMessage screen;while(xQueueReceive(screenMessages,&screen,0)==pdTRUE)if(lastTapId==screen.event){lcdShow(screen.name,screen.action);feedbackShow(screen.feedback);}
   unsigned long now=millis();
   if(ledActive&&now-ledAt>=200)ledActive=false; // Safe across millis() rollover during continuous operation.
   digitalWrite(STATUS_LED,storageFault?(now/150)%2:!utcNow()?(now/500)%2:ledActive?HIGH:WiFi.status()!=WL_CONNECTED&&now%2000<50);
   readSerialCommands();
   updateIdleScreen();
+  feedbackTick(millis()); // No sound/light delays that block card scanning or uploads.
   delay(30);
 }
