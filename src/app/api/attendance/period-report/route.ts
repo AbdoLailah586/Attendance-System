@@ -6,6 +6,8 @@ import { localDate,validDay,TIME_ZONE,cairoTime } from '@/lib/time';
 import { addDays,rangeDays,cycleRange,policyOn,buildPeriodReport,type EmployeePolicy,type ReportMode } from '@/lib/period-report';
 import type { AppUser } from '@/lib/types';
 import type { AttendanceLog } from '@/lib/attendance';
+import { loadBleRangeSummaries } from '@/lib/ble';
+import { bleReportFields } from '@/lib/ble-report';
 
 export async function GET(req:NextRequest){
   try{
@@ -30,7 +32,9 @@ export async function GET(req:NextRequest){
       const result=await query<AttendanceLog>(`(SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp<$2 ORDER BY timestamp DESC,id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp<$2 AND event_type IN ('clock_in','clock_out') ORDER BY timestamp DESC,id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp >=$2 AND timestamp<$3) ORDER BY timestamp,id`,[user.id,from.toISOString(),to.toISOString()]);
-      return buildPeriodReport(user,history,result.rows,settings,range.start,range.end);
+      const report=buildPeriodReport(user,history,result.rows,settings,range.start,range.end);
+      const ble=(await loadBleRangeSummaries([user.id],+from,+to,report.days.map(day=>day.date))).get(user.id);
+      return {...report,...bleReportFields(ble),days:report.days.map(day=>({...day,...bleReportFields(ble?.daily?.[day.date])}))};
     }));
     return NextResponse.json({mode,anchor,start:mode==='monthly'?null:start,end:mode==='monthly'?null:end,timeZone:TIME_ZONE,generatedAt:new Date().toISOString(),settings,reports},{headers:{'Cache-Control':'private, no-store'}});
   }catch(error){console.error('Period report failed:',error);return NextResponse.json({error:'تعذر تحميل التقرير؛ حاول التحديث'},{status:503});}

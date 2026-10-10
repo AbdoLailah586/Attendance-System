@@ -3,33 +3,37 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AppUser } from '@/lib/types';
 import { localDate } from '@/lib/time';
+import { bleDuration } from './BlePresenceCard';
 
 type Observation = { device_id: string; branch_name: string; state: 'seen' | 'not_seen' | 'unknown'; in_card_session: boolean; last_observation: string | null; rssi: number | null };
 type Tag = { id: number; address: string; user_id: number; name: string; grace_seconds: number; observations: Observation[] };
 type Device = { id: string; name: string; branch_name: string; receiver_state: 'ready' | 'fault' | 'stale' | 'disabled'; last_heartbeat: string | null };
 type Log = { id: string; state: 'seen' | 'not_seen'; tag_address: string; recorded_at: string; received_at: string; user_name: string | null; branch_name: string; status: string; rssi: number | null };
 type Report = { user_id: number; user_name: string; device_id: string; device_name: string; branch_name: string; observed_seconds: number; not_seen_seconds: number; unknown_seconds: number; session_seconds: number };
-type Data = { tags: Tag[]; devices: Device[]; logs: Log[]; total: number; page: number; reports: Report[]; truncated: boolean;
+type CombinedReport = { user_id: number; user_name: string; observed_seconds: number; not_seen_seconds: number; unknown_seconds: number; session_seconds: number };
+type Data = { tags: Tag[]; devices: Device[]; logs: Log[]; total: number; page: number; reports: Report[]; combined_reports?: CombinedReport[]; truncated: boolean;
   unknown_tags: { tag_address: string; recorded_at: string; branch_name: string }[] };
 
 const dateTime = (value: string | null) => value ? new Date(value).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' }) : 'لا توجد قراءة';
-const duration = (seconds: number) => `${Math.floor(seconds / 3600)} س ${Math.floor(seconds % 3600 / 60)} د`;
+const duration = bleDuration;
 const labels = { seen: 'مرصود', not_seen: 'غير مرصود · للمراجعة', unknown: 'غير معلوم' };
 const healthLabels = { ready: 'يعمل', fault: 'عطل في الرصد', stale: 'الاتصال غير محدّث', disabled: 'معطّل' };
 const colors = { seen: '#15803d', not_seen: '#b91c1c', unknown: '#64748b' };
 
 export default function BleManager({ users }: { users: AppUser[] }) {
   const [data, setData] = useState<Data | null>(null), [error, setError] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
-  const [fromDay, setFromDay] = useState(localDate), [toDay, setToDay] = useState(localDate), [page, setPage] = useState(1);
+  const [fromDay, setFromDay] = useState(localDate), [toDay, setToDay] = useState(localDate), [page, setPage] = useState(1), [reportUser, setReportUser] = useState('all');
   const [address, setAddress] = useState(''), [userId, setUserId] = useState(''), [grace, setGrace] = useState(90);
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await fetch(`/api/ble/admin?from_day=${fromDay}&to_day=${toDay}&page=${page}`, { cache: 'no-store', signal });
+      const params = new URLSearchParams({ from_day: fromDay, to_day: toDay, page: String(page) });
+      if (reportUser !== 'all') params.set('user_id', reportUser);
+      const response = await fetch(`/api/ble/admin?${params}`, { cache: 'no-store', signal });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'تعذر تحميل البلوتوث');
       if (!signal?.aborted) { setData(result); setError(''); }
     } catch (failure) { if (!signal?.aborted) setError(failure instanceof Error ? failure.message : 'تعذر تحميل البلوتوث'); }
-  }, [fromDay, toDay, page]);
+  }, [fromDay, toDay, page, reportUser]);
   useEffect(() => {
     const controller = new AbortController();
     let running = false;
@@ -84,14 +88,19 @@ export default function BleManager({ users }: { users: AppUser[] }) {
       }}><label>مهلة فقد الإشارة<input key={`${tag.id}-${tag.grace_seconds}`} name="grace" className="form-input" type="number" min={60} max={600} required defaultValue={tag.grace_seconds} /></label><button className="btn btn-secondary" disabled={busy}>حفظ المهلة</button></form>
     </article>)}
     <div className="card" style={{ padding: 20 }}>
-      <h3>فترات الرصد أثناء الشيفت</h3>
-      <div className="metrics-grid"><label>من يوم<input className="form-input" type="date" value={fromDay} onChange={e => { setFromDay(e.target.value); setPage(1); }} /></label><label>حتى يوم<input className="form-input" type="date" value={toDay} onChange={e => { setToDay(e.target.value); setPage(1); }} /></label></div>
-      <p className="muted">كل صف يخص رصد جهاز فرع واحد داخل فترة الكارت؛ لا تجمع أوقات الفرعين لأنها قد تتداخل. «غير مرصود» يعني فقد رصد التاج، ولا يثبت غياب الموظف.</p>
+      <h3>تقرير رصد التاج أثناء الشيفت</h3>
+      <div className="metrics-grid"><label>من يوم<input className="form-input" type="date" value={fromDay} onChange={e => { setFromDay(e.target.value); setPage(1); }} /></label><label>حتى يوم<input className="form-input" type="date" value={toDay} onChange={e => { setToDay(e.target.value); setPage(1); }} /></label><label>الموظف<select className="form-input" value={reportUser} onChange={e => { setReportUser(e.target.value); setPage(1); }}><option value="all">كل الموظفين</option>{users.filter(user => user.role === 'employee' || data?.reports.some(report => report.user_id === user.id)).map(user => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label></div>
+      <p className="muted">الإجمالي يجمع رصد الفروع دون احتساب الفترة نفسها مرتين. «غير مرصود» يعني فقد رصد التاج ويحتاج مراجعة، ولا يثبت غياب الموظف. عطل القارئ أو انقطاع اتصاله يظهر «غير معلوم».</p>
       {data?.truncated && <p role="alert">الفترة كبيرة جدًا على حجم البيانات الحالي. التقرير يعرض وقتًا غير معلوم؛ اختار فترة أقصر للحصول على التفاصيل.</p>}
+      <div style={{ display: 'grid', gap: 12 }}>{data?.combined_reports?.map(report => <div key={report.user_id} style={{ padding: 16, border: '1px solid #cbd5e1', borderRadius: 12 }}>
+        <h4>{report.user_name} · إجمالي الفروع</h4><p>فترة المتابعة بالكارت: {duration(report.session_seconds)}</p>
+        <div className="metrics-grid"><div className="metric"><span>التاج مرصود</span><strong style={{ color: colors.seen }}>{duration(report.observed_seconds)}</strong></div><div className="metric"><span>غير مرصود · للمراجعة</span><strong style={{ color: colors.not_seen }}>{duration(report.not_seen_seconds)}</strong></div><div className="metric"><span>غير معلوم</span><strong style={{ color: colors.unknown }}>{duration(report.unknown_seconds)}</strong></div></div>
+      </div>)}{data?.combined_reports && !data.combined_reports.length && <p>لا توجد فترة كارت لموظف مربوط بتاج في الفترة المختارة.</p>}</div>
+      <details style={{ marginTop: 16 }}><summary style={{ cursor: 'pointer' }}>تفاصيل الرصد لكل قارئ وفرع</summary><p className="muted">التفاصيل للتشخيص والمراجعة؛ قد يرصد أكثر من قارئ التاج في الوقت نفسه. لا تجمع صفوف القارئات لحساب الإجمالي.</p>
       <div style={{ display: 'grid', gap: 12 }}>{data?.reports.map(report => <div key={`${report.user_id}-${report.device_id}`} style={{ padding: 14, border: '1px solid #e2e8f0', borderRadius: 12 }}>
         <strong>{report.user_name} · {report.branch_name} · {report.device_name}</strong><p>فترة الكارت: {duration(report.session_seconds)}</p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20 }}><span style={{ color: colors.seen }}>مرصود: {duration(report.observed_seconds)}</span><span style={{ color: colors.not_seen }}>غير مرصود للمراجعة: {duration(report.not_seen_seconds)}</span><span style={{ color: colors.unknown }}>غير معلوم: {duration(report.unknown_seconds)}</span></div>
-      </div>)}{data && !data.reports.length && <p>لا توجد فترة كارت لموظف مربوط بتاج في الفترة المختارة.</p>}</div>
+      </div>)}{data && !data.reports.length && <p>لا توجد تفاصيل رصد في الفترة المختارة.</p>}</div></details>
     </div>
     <div className="card" style={{ padding: 20 }}>
       <h3>قراءات البلوتوث التشخيصية</h3><p className="muted">القراءة محفوظة بوقت التقاطها ووقت وصولها، حتى لو التاج غير مربوط أو خارج فترة الشيفت.</p>

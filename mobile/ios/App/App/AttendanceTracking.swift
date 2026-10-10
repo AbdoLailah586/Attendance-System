@@ -27,16 +27,22 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         return directory.appendingPathComponent("attendance-events.json")
     }
     var active: Bool { prefs.bool(forKey: "attendance-active") }
+    var trackingSource: String { prefs.string(forKey: "attendance-source") ?? "gps" }
     var windowEnd: Double {
         guard let data=prefs.data(forKey:"attendance-windows"),let windows=(try? JSONSerialization.jsonObject(with:data)) as? [[String:Any]] else{return 0}
         let now=Date().timeIntervalSince1970*1000
         for w in windows { if let start=w["start"] as? Double,let end=w["end"] as? Double,now>=start && now<end{return end/1000} }
         return 0
     }
-    var allowed: Bool { windowEnd>0 && prefs.double(forKey:"attendance-schedule-until")>Date().timeIntervalSince1970*1000 }
+    var allowed: Bool { trackingSource == "gps" && windowEnd>0 && prefs.double(forKey:"attendance-schedule-until")>Date().timeIntervalSince1970*1000 }
     func setSchedule(_ value:String) throws {
         guard let bytes=value.data(using:.utf8),let schedule=(try JSONSerialization.jsonObject(with:bytes)) as? [String:Any],let windows=schedule["windows"] as? [[String:Any]],let until=schedule["valid_until"] as? Double else{throw problem("مواعيد الشيفت غير صالحة")}
-        prefs.set(try JSONSerialization.data(withJSONObject:windows),forKey:"attendance-windows");prefs.set(until,forKey:"attendance-schedule-until");prefs.set(schedule["ping_interval_secs"] as? Int ?? 60,forKey:"attendance-ping-secs")
+        let source = schedule["source"] as? String ?? "gps"
+        guard source == "gps" || source == "ble" else { throw problem("مصدر المتابعة غير صالح") }
+        if source == "ble" && trackingSource != "ble" { prefs.removeObject(forKey:"attendance-error");prefs.removeObject(forKey:"attendance-location") }
+        prefs.set(source,forKey:"attendance-source")
+        prefs.set(try JSONSerialization.data(withJSONObject:source == "ble" ? [] : windows),forKey:"attendance-windows");prefs.set(until,forKey:"attendance-schedule-until");prefs.set(schedule["ping_interval_secs"] as? Int ?? 60,forKey:"attendance-ping-secs")
+        if source == "ble" { prefs.set(false,forKey:"attendance-active");if startCall != nil { failStart("متابعة التاج تتم من قارئ الفرع") };pauseAtEnd();return }
         if active { if allowed {resume()} else {pauseAtEnd()} }
     }
     private func pauseAtEnd(){
@@ -98,6 +104,8 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
             result = SecItemAdd(add as CFDictionary, nil)
         }
         guard result == errSecSuccess else { throw problem("تعذر حفظ الجلسة بأمان") }
+        if id != userID { prefs.removeObject(forKey:"attendance-windows");prefs.removeObject(forKey:"attendance-schedule-until");prefs.set("gps",forKey:"attendance-source") }
+        if identity["role"] as? String != "employee" { prefs.set(false,forKey:"attendance-active");pauseAtEnd() }
         prefs.set(data, forKey: "attendance-user")
         prefs.removeObject(forKey: "attendance-error")
     }
@@ -125,6 +133,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         try persist(queue + [event])
     }
     func start(_ call: CAPPluginCall) {
+        guard trackingSource != "ble" else { call.reject("متابعة التاج تتم من قارئ الفرع؛ لا تحتاج تشغيل موقع الهاتف");return }
         guard prefs.double(forKey:"attendance-schedule-until")>Date().timeIntervalSince1970*1000 else {call.reject("حدّث حالة الكارت قبل تفعيل المتابعة");return}
         guard startCall == nil else { call.reject("انتظر التقاط GPS"); return }
         guard user?["role"] as? String == "employee" else { call.reject("حساب موظف مطلوب"); return }
@@ -200,7 +209,7 @@ final class AttendanceEngine: NSObject, CLLocationManagerDelegate {
         }
     }
     func status() -> [String: Any] {
-        ["user": user.map { $0 as Any } ?? NSNull(), "active": active, "tracking": active && allowed && manager.authorizationStatus == .authorizedAlways, "pending": queue.count,
+        ["user": user.map { $0 as Any } ?? NSNull(), "trackingSource": trackingSource, "sessionOpen": allowed, "active": active, "tracking": active && allowed && manager.authorizationStatus == .authorizedAlways, "pending": queue.count,
          "error": queueError.isEmpty ? prefs.string(forKey: "attendance-error") ?? "" : queueError,
          "locationLabel": prefs.string(forKey: "attendance-location") ?? ""]
     }

@@ -8,7 +8,6 @@ import {
   MapPin,
   Clock,
   CheckCircle2,
-  AlertTriangle,
   RefreshCw,
   Plus,
   Trash2,
@@ -24,6 +23,7 @@ import AttendanceReports from './AttendanceReports';
 import DayCloseReport from './DayCloseReport';
 import NfcManager from './NfcManager';
 import BleManager from './BleManager';
+import LiveEmployeeCard, { needsPresenceReview, observedBranch } from './LiveEmployeeCard';
 import EmployeeEditor from './EmployeeEditor';
 import type { EmployeePolicy } from '@/lib/period-report';
 import type { AppUser, LiveEmployee } from '@/lib/types';
@@ -40,6 +40,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
   const [liveData, setLiveData] = useState<LiveEmployee[]>([]);
   const [settings, setSettings] = useState<StoreSettings | null>(null);
   const [loadingLive, setLoadingLive] = useState(false);
+  const [liveError, setLiveError] = useState('');
   const [autoRefresh] = useState(true);
 
   const [reportRefresh,setReportRefresh]=useState(0);
@@ -84,17 +85,21 @@ export default function AdminDashboard({}: AdminDashboardProps) {
   const fetchLiveData = async () => {
     try {
 
-      const res = await fetch('/api/attendance/live');
+      const res = await fetch('/api/attendance/live', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         setLiveData(data.employees || []);
+        setLiveError('');
         if (data.settings) {
           setSettings(data.settings);
           setSettingsForm(data.settings);
         }
+      } else {
+        setLiveError('تعذر تحديث المتابعة؛ النتائج المعروضة هي آخر قراءة محفوظة.');
       }
     } catch (err) {
       console.error('Fetch live error:', err);
+      setLiveError('تعذر الاتصال؛ النتائج المعروضة هي آخر قراءة محفوظة.');
     } finally {
       setLoadingLive(false);
     }
@@ -255,7 +260,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
             لوحة تحكم إدارة الحضور والفروع
           </h2>
           <p style={{ fontSize: '0.875rem', color: '#64748b' }}>
-            متابعة حية للموظفين، تقارير بالساعة والدقيقة، وإعدادات جغرافية
+            متابعة الكروت والتاج والموقع، وتقارير الفروع أثناء الشيفت
           </p>
         </div>
 
@@ -331,37 +336,39 @@ export default function AdminDashboard({}: AdminDashboardProps) {
       {activeTab === 'settings' && <BranchManager onSaved={fetchLiveData} />}
       {activeTab === 'live' && (
         <div>
+          {liveError && <p role="alert" className="tracker-warning">{liveError}</p>}
+          <p className="muted" style={{ marginBottom: 14 }}>حالة الموظف حسب مصدر المتابعة المرتبط به: التاج بالبلوتوث أو الموقع GPS. فقد الرصد يحتاج مراجعة.</p>
           {/* Branch summary stats bar */}
           <div className="grid-4" style={{ marginBottom: '20px' }}>
             <div className="card" style={{ padding: '16px', borderTop: '4px solid #059669' }}>
               <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                المتواجدون في {settings?.branch1_name || 'المحل الأول'}
+                مرصودون في {settings?.branch1_name || 'المحل الأول'}
               </span>
               <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#059669', marginTop: '4px' }}>
-                {liveData.filter((e) => e.currentStatus === 'branch1').length} موظف
+                {liveError ? '—' : liveData.filter(e => observedBranch(e) === 'branch1').length} موظف
               </div>
             </div>
 
             <div className="card" style={{ padding: '16px', borderTop: '4px solid #4f46e5' }}>
               <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                المتواجدون في {settings?.branch2_name || 'المحل الثاني'}
+                مرصودون في {settings?.branch2_name || 'المحل الثاني'}
               </span>
               <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#4f46e5', marginTop: '4px' }}>
-                {liveData.filter((e) => e.currentStatus === 'branch2').length} موظف
+                {liveError ? '—' : liveData.filter(e => observedBranch(e) === 'branch2').length} موظف
               </div>
             </div>
 
             <div className="card" style={{ padding: '16px', borderTop: '4px solid #d97706' }}>
-              <span style={{ fontSize: '0.8rem', color: '#64748b' }}>خارج نطاق المحلين</span>
+              <span style={{ fontSize: '0.8rem', color: '#64748b' }}>غير مرصود / خارج النطاق · للمراجعة</span>
               <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#d97706', marginTop: '4px' }}>
-                {liveData.filter((e) => e.currentStatus === 'outside').length} موظف
+                {liveError ? '—' : liveData.filter(needsPresenceReview).length} موظف
               </div>
             </div>
 
             <div className="card" style={{ padding: '16px', borderTop: '4px solid #94a3b8' }}>
-              <span style={{ fontSize: '0.8rem', color: '#64748b' }}>غير متصل / لم يبدأ</span>
+              <span style={{ fontSize: '0.8rem', color: '#64748b' }}>غير معلوم / خارج فترة المتابعة</span>
               <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#64748b', marginTop: '4px' }}>
-                {liveData.filter((e) => e.currentStatus === 'offline' || e.currentStatus === 'not_started').length} موظف
+                {liveError ? '—' : liveData.filter(e => !observedBranch(e) && !needsPresenceReview(e)).length} موظف
               </div>
             </div>
           </div>
@@ -380,7 +387,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <MapPin size={20} color="#2563eb" />
                   <strong style={{ fontSize: '1.05rem', color: '#0f172a' }}>
-                    الخريطة الحية ونطاقات الفروع
+                    خريطة عينات GPS ونطاقات الفروع
                   </strong>
                 </div>
 
@@ -410,170 +417,34 @@ export default function AdminDashboard({}: AdminDashboardProps) {
                   lng: settings.branch2_lng,
                   radius: settings.branch2_radius,
                 }}
-                employees={liveData.map((e) => ({
+                employees={liveData.filter(e => e.presence_source !== 'ble').map((e) => ({
                   id: e.user.id,
                   name: e.user.name,
                   lat: e.latestLog?.lat ?? NaN,
                   lng: e.latestLog?.lng ?? NaN,
                   branch_id: e.currentStatus,
-                  isOnline: e.isOnline,
+                  isOnline: !liveError && e.isOnline,
                   distance1: e.latestLog?.distance_branch1 ?? 0,
                   distance2: e.latestLog?.distance_branch2 ?? 0,
                 }))}
                 height="380px"
               />
+              <p className="muted" style={{ marginTop: 10 }}>التاج يحدد الفرع الذي رصد إشارته، ولا يقدم إحداثيات GPS؛ حالته تظهر في بطاقة الموظف.</p>
             </div>
           )}
 
           {/* Live Employees Cards */}
           <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a', marginBottom: '14px' }}>
-            حالة الموظفين اللحظية الآن (تحديث كل 60 ثانية)
+            حالة الموظفين الآن · تحديث كل 15 ثانية
           </h3>
 
           <div className="grid-3" style={{ gap: '16px' }}>
-            {liveData.map((emp) => (
-              <div
-                key={emp.user.id}
-                className="card"
-                style={{
-                  padding: '20px',
-                  borderRadius: '16px',
-                  borderWidth: '1.5px',
-                  borderColor:
-                    emp.currentStatus === 'branch1'
-                      ? 'var(--branch1-border)'
-                      : emp.currentStatus === 'branch2'
-                      ? 'var(--branch2-border)'
-                      : emp.currentStatus === 'outside'
-                      ? 'var(--outside-border)'
-                      : 'var(--border-color)',
-                }}
-              >
-                {/* Employee Header */}
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'flex-start',
-                    marginBottom: '14px',
-                  }}
-                >
-                  <div>
-                    <h4 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#0f172a', marginBottom: '2px' }}>
-                      {emp.user.name}
-                    </h4>
-                    <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                      @{emp.user.username} {emp.user.phone ? `• ${emp.user.phone}` : ''}
-                    </span>
-                  </div>
-
-                  {emp.currentStatus === 'branch1' ? (
-                    <span className="badge badge-branch1">
-                      <span className="pulse-dot online" />
-                      <span>{settings?.branch1_name || 'المحل الأول'}</span>
-                    </span>
-                  ) : emp.currentStatus === 'branch2' ? (
-                    <span className="badge badge-branch2">
-                      <span className="pulse-dot online" />
-                      <span>{settings?.branch2_name || 'المحل الثاني'}</span>
-                    </span>
-                  ) : emp.currentStatus === 'outside' ? (
-                    <span className="badge badge-outside">
-                      <AlertTriangle size={14} />
-                      <span>خارج المحلين</span>
-                    </span>
-                  ) : settings?.branches?.some(b=>b.id===emp.currentStatus) ? (
-                    <span className="badge badge-branch1">{settings.branches.find(b=>b.id===emp.currentStatus)?.name}</span>
-                  ) : emp.currentStatus === 'clocked_out' ? (
-                    <span className="badge badge-offline">انتهى الشيفت</span>
-                  ) : emp.currentStatus === 'unknown' ? (
-                    <span className="badge badge-outside">موقع غير مؤكد</span>
-                  ) : (
-                    <span className="badge badge-offline">
-                      <span className="pulse-dot offline" />
-                      <span>غير متصل</span>
-                    </span>
-                  )}
-                </div>
-
-                {/* Distances & Last Ping */}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '8px',
-                    padding: '10px',
-                    background: '#f8fafc',
-                    borderRadius: '10px',
-                    marginBottom: '12px',
-                    fontSize: '0.8rem',
-                  }}
-                >
-                  <div>
-                    <span style={{ color: '#64748b', display: 'block' }}>المحل 1:</span>
-                    <strong style={{ color: '#059669' }}>
-                      {emp.latestLog?.distance_branch1 !== undefined
-                        ? `${Math.round(emp.latestLog.distance_branch1)} م`
-                        : '--'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span style={{ color: '#64748b', display: 'block' }}>المحل 2:</span>
-                    <strong style={{ color: '#4f46e5' }}>
-                      {emp.latestLog?.distance_branch2 !== undefined
-                        ? `${Math.round(emp.latestLog.distance_branch2)} م`
-                        : '--'}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* Today's Duration Summary */}
-                <div style={{ fontSize: '0.85rem', marginBottom: '10px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ color: '#64748b' }}>إجمالي الحضور اليوم:</span>
-                    <strong style={{ color: '#0f172a' }}>{emp.summary.totalFormatted}</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ color: '#059669' }}>في المحل الأول:</span>
-                    <span>{emp.summary.branch1Formatted}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: '#4f46e5' }}>في المحل الثاني:</span>
-                    <span>{emp.summary.branch2Formatted}</span>
-                  </div>
-                </div>
-
-                {/* Punctuality and Last Ping time */}
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    paddingTop: '10px',
-                    borderTop: '1px solid #f1f5f9',
-                    fontSize: '0.75rem',
-                    color: '#94a3b8',
-                  }}
-                >
-                  <span className={`badge ${emp.punctuality.badgeClass}`} style={{ fontSize: '0.75rem', padding: '2px 8px' }}>
-                    {emp.punctuality.label}
-                  </span>
-
-                  <span>
-                    {emp.minutesSincePing !== null
-                      ? emp.minutesSincePing === 0
-                        ? 'الآن (منذ ثوانٍ)'
-                        : `منذ ${emp.minutesSincePing} دقيقة`
-                      : 'لا يوجد نبضات اليوم'}
-                  </span>
-                </div>
-              </div>
-            ))}
+            {liveData.map(employee => <LiveEmployeeCard key={employee.user.id} employee={employee} settings={settings} stale={!!liveError} />)}
           </div>
         </div>
       )}
 
-      {activeTab === 'reports' && <><DayCloseReport/><AttendanceReports users={usersList} refreshKey={reportRefresh} /></>}
+      {activeTab === 'reports' && <><div className="card" style={{ padding: 18, marginBottom: 16 }}><h3>تقارير مصادر المتابعة</h3><p className="muted">تقارير الكارت وGPS أدناه تحتفظ بسجلها. فترات رصد التاج تظهر في تقرير البلوتوث، وتُحسب مستقلة عن أوقات GPS.</p><button className="btn btn-secondary" onClick={() => setActiveTab('ble')}>فتح تقرير رصد التاج</button></div><DayCloseReport/><AttendanceReports users={usersList} refreshKey={reportRefresh} /></>}
 
       {/* TAB 3: SETTINGS & GEOFENCING */}
       {activeTab === 'settings' && (

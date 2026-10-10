@@ -11,5 +11,5 @@ export default function AppInstall() {
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
   if (!prompt) return null;
-  return <button className="btn btn-secondary" onClick={async () => { await prompt.prompt(); await prompt.userChoice; setPrompt(null); }}>تثبيت الحضور على الهاتف</button>;
+  return <button className="btn btn-secondary" onClick={async () => { await prompt.prompt(); await prompt.userChoice; setPrompt(null); }}>إضافة لوحة الحضور للهاتف</button>;
 }

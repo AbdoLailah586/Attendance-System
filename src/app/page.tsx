@@ -84,7 +84,7 @@ export default function Home() {
           }}
         />
         <p style={{ color: '#64748b', fontSize: '0.95rem', fontWeight: 600 }}>
-          جاري تهيئة نظام الحضور الجغرافي...
+          جاري تحميل نظام الحضور...
         </p>
         <style jsx>{`
           @keyframes spin {

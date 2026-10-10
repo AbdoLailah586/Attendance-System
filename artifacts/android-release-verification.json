@@ -1,36 +1,36 @@
 {
   "physicalAndroidConnected": false,
-  "apk": "artifacts/attendance-android-v1.2.0.apk",
+  "apk": "artifacts/attendance-android-v1.3.0.apk",
   "features": [
-    "actual NFC arrival/departure window",
-    "native location foreground service",
-    "maximum hours cap",
-    "offline SQLite queue",
-    "unique event ACK synchronization",
-    "capture time GPS timestamps",
-    "precise location requirement",
-    "account isolation and stale schedule guards",
-    "cached offline dashboard",
-    "last GPS/accuracy/sync status",
-    "administrator WebView with CSV save picker"
+    "server selected BLE/GPS mode",
+    "direct ESP32 tag presence display without phone GPS for assigned staff",
+    "native GPS shutdown on BLE assignment",
+    "card session maximum hours cap",
+    "observed/not seen/unknown union time",
+    "receiver health and capture timestamps",
+    "account-isolated cached dashboard",
+    "offline SQLite GPS queue preserved",
+    "administrator WebView with reports and CSV save picker"
   ],
-  "version": "1.2.0",
+  "version": "1.3.0",
   "physicalAdminNavigationAndCsvSaveVerified": false,
   "viteBuild": "success",
-  "clientDate": "2026-10-06",
-  "sha256": "343b4b7c704c4a6b618d9bda707fec3ae9af35e2438b0e7a61f4c1f667fab954",
+  "clientDate": "2026-10-10",
+  "sha256": "88a2a2e6af2fd3ec4e7bedcae944854b53fdeaab3124f08d9e1afc8a8b328d03",
   "gradleAssembleDebug": "success",
   "signatureVerified": true,
   "androidLint": "passed with no errors",
   "sameSigningKeyAsPreviousLocalApk": true,
   "minAndroid": "8.0 (API 26)",
   "physicalScreenLockGpsVerified": false,
-  "versionCode": 3,
+  "versionCode": 4,
   "applicationId": "com.joestore.attendance",
   "production": {
     "isolatedFixturesCleaned": true,
     "url": "https://attendance-system-joe-2026.vercel.app/",
-    "dailyFlowChecksPassed": 26
+    "dailyFlowChecksPassed": 26,
+    "currentBleUpdateVerification": "pending deployment; see BLE verification artifact after deployment"
   },
-  "bytes": 4588377
+  "bytes": 4566905,
+  "iosBuiltOrSigned": false
 }

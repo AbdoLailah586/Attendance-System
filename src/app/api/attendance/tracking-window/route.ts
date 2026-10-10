@@ -6,16 +6,22 @@ import {inTrackingWindow} from '@/lib/tracking-window';
 import {cardWindowsSql} from '@/lib/card-day';
 import {loadSettings} from '@/lib/schema';
 import type {AppUser} from '@/lib/types';
+import {ensureBleSchema} from '@/lib/ble';
 
 export async function GET(req:NextRequest){
   const session=await getActiveSession(req);
   if(!session||session.role!=='employee')return NextResponse.json({error:'حساب موظف مطلوب'},{status:401});
   try{
     await ensureAttendanceSchema();
+    await ensureBleSchema();
     const user=(await query<AppUser>("SELECT *,to_char(attendance_start_date,'YYYY-MM-DD') AS attendance_start_date FROM users WHERE id=$1",[session.id])).rows[0];
     const settings=await loadSettings();
     const rows=(await query<{day:string;start:Date;finish:Date}>(cardWindowsSql,[session.id,user.max_tracking_hours??settings.max_tracking_hours??12,new Date(Date.now()-32*86400000),new Date(Date.now()+120000)])).rows;
-    const windows=user.is_active!==false&&user.role==='employee'?rows.map(r=>({day:r.day,start:+new Date(r.start),end:+new Date(r.finish)})):[];
-    return NextResponse.json({ping_interval_secs:settings.ping_interval_secs,windows,active:inTrackingWindow(windows),timeZone:'Africa/Cairo',server_time:Date.now(),valid_until:Math.max(Date.now()+86400000,...windows.map(w=>w.end))},{headers:{'Cache-Control':'private, no-store'}});
+    const cardWindows=user.is_active!==false&&user.role==='employee'?rows.map(r=>({day:r.day,start:+new Date(r.start),end:+new Date(r.finish)})):[];
+    const hasTag=(await query('SELECT id FROM ble_tags WHERE user_id=$1 AND revoked_at IS NULL LIMIT 1',[session.id])).rows.length>0;
+    const windows=hasTag?[]:cardWindows;
+    return NextResponse.json({source:hasTag?'ble':'gps',tracking_mode:hasTag?'ble':'gps',card_session_active:inTrackingWindow(cardWindows),
+      ping_interval_secs:settings.ping_interval_secs,windows,active:inTrackingWindow(windows),timeZone:'Africa/Cairo',server_time:Date.now(),
+      valid_until:Math.max(Date.now()+86400000,...cardWindows.map(w=>w.end))},{headers:{'Cache-Control':'private, no-store'}});
   }catch(e){console.error('Tracking schedule',e);return NextResponse.json({error:'تعذر تحميل مواعيد المتابعة'},{status:503});}
 }

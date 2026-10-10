@@ -7,13 +7,15 @@ import { buildReport,type AttendanceLog } from '@/lib/attendance';
 import { dayWindow } from '@/lib/period-report';
 import {businessDay,dailyRules} from '@/lib/card-day';
 import type {AppUser} from '@/lib/types';
+import {loadBlePresence} from '@/lib/ble';
 
 export async function GET(req: NextRequest) {
   try {
     const session = await getActiveSession(req);
     if (!session || session.role !== 'admin') return NextResponse.json({ error: 'صلاحيات المدير مطلوبة' }, { status: 403 });
     const settings = await loadSettings();
-    const users = await query<AppUser>("SELECT id, username, name, phone, shift_start, shift_end, is_active,grace_period_mins FROM users WHERE role='employee' AND is_active=TRUE ORDER BY id");
+    const users = await query<AppUser>("SELECT id, username, name, phone, role,shift_start, shift_end, is_active,grace_period_mins FROM users WHERE role='employee' AND is_active=TRUE ORDER BY id");
+    const presence=await loadBlePresence(users.rows,settings);
 
     const employees = await Promise.all(users.rows.map(async user => {
       // Before an overnight shift starts, live tracking belongs to the preceding shift day.
@@ -29,7 +31,9 @@ export async function GET(req: NextRequest) {
       const latestLog = result.rows.filter(l=>l.event_type==='ping'&&report.firstArrival&&+new Date(l.timestamp)>=Date.parse(report.firstArrival)).at(-1)||null;
       const minutesSincePing = latestLog ? Math.floor((Date.now() - new Date(latestLog.timestamp).getTime()) / 60000) : null;
       const isOnline = report.onDuty && minutesSincePing !== null && minutesSincePing <= Math.max(3, settings.ping_interval_secs / 20);
-      return { user, ...report, latestLog, minutesSincePing, isOnline, currentStatus: !latestLog ? 'not_started' : !report.onDuty ? 'clocked_out' : isOnline ? latestLog.branch_id : 'offline' };
+      const ble=presence.get(user.id)||null;
+      return { user, ...report, latestLog, minutesSincePing, isOnline, currentStatus: !latestLog ? 'not_started' : !report.onDuty ? 'clocked_out' : isOnline ? latestLog.branch_id : 'offline',
+        presence_source:ble?.tracking_mode||'gps',ble };
     }));
     return NextResponse.json({ timestamp: new Date().toISOString(), settings, employees }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {

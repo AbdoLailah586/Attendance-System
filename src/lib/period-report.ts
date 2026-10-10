@@ -2,6 +2,7 @@ import { buildReport, type AttendanceLog } from './attendance';
 import { formatDurationArabic, type StoreSettings } from './geo';
 import { cairoTime, nextDay, shiftWindow, validDay, localDate } from './time';
 import type { AppUser } from './types';
+import type { BleReportFields } from './ble-types';
 
 export type ReportMode = 'daily' | 'weekly' | 'monthly' | 'custom';
 export interface EmployeePolicy {
@@ -87,4 +88,5 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
     branches:allIds.map(id=>({id,name:branchNames[id]||id,...duration(branchTotals[id]||0)})),
   }};
 }
-export type PeriodReport=ReturnType<typeof buildPeriodReport>;
+type CardPeriodReport=ReturnType<typeof buildPeriodReport>;
+export type PeriodReport=Omit<CardPeriodReport,'days'>&BleReportFields&{days:(CardPeriodReport['days'][number]&BleReportFields)[]};

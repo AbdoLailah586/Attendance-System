@@ -98,10 +98,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             <Store size={32} />
           </div>
           <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', marginBottom: '6px' }}>
-            نظام الحضور الجغرافي الذكي
+            نظام الحضور والانصراف
           </h2>
           <p style={{ fontSize: '0.9rem', color: '#64748b' }}>
-            تتبع الحضور والانصراف بين الفرعين بدقة كل 60 ثانية
+            حضور بالكارت ومتابعة الفروع أثناء الشيفت
           </p>
         </div>
 

@@ -5,7 +5,7 @@ import AppInstall from '@/components/AppInstall';
 
 export const metadata: Metadata = {
   title: 'نظام الحضور والانصراف الذكي | تتبع الفروع والموظفين',
-  description: 'نظام متقدم لتتبع حضور وانصراف الموظفين جغرافياً بين المحلين بدقة كل 60 ثانية مع تقارير تفصيلية بالساعة والدقيقة ومعدل الانضباط.',
+  description: 'حضور وانصراف بالكارت، ومتابعة التاج بالبلوتوث أو الموقع أثناء الشيفت، مع تقارير الفروع وفترات الرصد والمراجعة.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,

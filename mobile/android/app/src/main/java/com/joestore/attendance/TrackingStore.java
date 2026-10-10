@@ -64,7 +64,7 @@ final class TrackingStore extends SQLiteOpenHelper {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, key());
         String encrypted = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP) + ":" + Base64.encodeToString(cipher.doFinal(token.getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
         SharedPreferences.Editor edit=prefs.edit().putString("token", encrypted).putString("user", user).putString("error", "");
-        if(identity.getInt("id")!=userId())edit.putString("windows","[]").putLong("schedule_until",0).remove("locationLabel").remove("last_ping_at").remove("last_sync_at");
+        if(identity.getInt("id")!=userId())edit.putString("windows","[]").putLong("schedule_until",0).putString("tracking_source","gps").remove("locationLabel").remove("last_ping_at").remove("last_sync_at");
         if(!"employee".equals(identity.optString("role"))){edit.putBoolean("active",false).putString("windows","[]");context.stopService(new android.content.Intent(context,TrackingService.class));}
         if (!edit.commit()) throw new Exception("تعذر حفظ الجلسة");
         sessionGeneration++;
@@ -81,6 +81,7 @@ final class TrackingStore extends SQLiteOpenHelper {
         try { return new JSONObject(prefs.getString("user", "{}")).getInt("id"); } catch (Exception e) { return 0; }
     }
     synchronized boolean active() { return prefs.getBoolean("active", false); }
+    synchronized String trackingSource() { return prefs.getString("tracking_source", "gps"); }
     synchronized void setActive(boolean active) throws Exception {
         android.content.SharedPreferences.Editor edit=prefs.edit().putBoolean("active", active);
         if(active)edit.putLong("shift_started_at",System.currentTimeMillis());
@@ -107,8 +108,13 @@ final class TrackingStore extends SQLiteOpenHelper {
         if (active() && allowed()) record("ping", location);
     }
     synchronized void setSchedule(JSONObject schedule) throws Exception {
-        JSONArray windows=schedule.getJSONArray("windows");
-        if(!prefs.edit().putString("windows",windows.toString()).putLong("schedule_until",schedule.getLong("valid_until")).putInt("ping_secs",schedule.optInt("ping_interval_secs",60)).commit())throw new Exception("Cannot save schedule");
+        String source=schedule.optString("source","gps");
+        if(!source.equals("gps")&&!source.equals("ble"))throw new Exception("Invalid tracking source");
+        JSONArray windows=source.equals("ble")?new JSONArray():schedule.getJSONArray("windows");
+        SharedPreferences.Editor edit=prefs.edit().putString("tracking_source",source).putString("windows",windows.toString()).putLong("schedule_until",schedule.getLong("valid_until")).putInt("ping_secs",schedule.optInt("ping_interval_secs",60));
+        if(source.equals("ble")){edit.putBoolean("active",false);if(!trackingSource().equals("ble"))edit.remove("error").remove("locationLabel");}
+        if(!edit.commit())throw new Exception("Cannot save schedule");
+        if(source.equals("ble"))context.stopService(new android.content.Intent(context,TrackingService.class));
     }
     synchronized boolean hasSchedule(){return prefs.getLong("schedule_until",0)>System.currentTimeMillis();}
     synchronized long windowEnd(){return windowEndAt(System.currentTimeMillis());}
@@ -117,8 +123,8 @@ final class TrackingStore extends SQLiteOpenHelper {
             for(int i=0;i<windows.length();i++){JSONObject w=windows.getJSONObject(i);if(time>=w.getLong("start")&&time<w.getLong("end"))return w.getLong("end");}
         }catch(Exception ignored){}return 0;
     }
-    synchronized boolean allowed(){return hasSchedule()&&windowEnd()>0;}
-    synchronized boolean allowedAt(long time){return hasSchedule()&&time>0&&time<=System.currentTimeMillis()+10000&&windowEndAt(time)>0;}
+    synchronized boolean allowed(){return trackingSource().equals("gps")&&hasSchedule()&&windowEnd()>0;}
+    synchronized boolean allowedAt(long time){return trackingSource().equals("gps")&&hasSchedule()&&time>0&&time<=System.currentTimeMillis()+10000&&windowEndAt(time)>0;}
     private final AtomicBoolean fetchingSchedule=new AtomicBoolean(false);
     void refreshSchedule(){
         if(!fetchingSchedule.compareAndSet(false,true))return;

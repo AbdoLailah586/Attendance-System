@@ -7,6 +7,8 @@ import {addDays,type EmployeePolicy} from '@/lib/period-report';
 import {buildReport,type AttendanceLog} from '@/lib/attendance';
 import {validDay} from '@/lib/time';
 import type {AppUser} from '@/lib/types';
+import {loadBleRangeSummaries} from '@/lib/ble';
+import {bleReportFields} from '@/lib/ble-report';
 export async function GET(req:NextRequest){
   if((await getActiveSession(req))?.role!=='admin')return NextResponse.json({error:'صلاحيات المدير مطلوبة'},{status:403});
   try{
@@ -21,7 +23,8 @@ export async function GET(req:NextRequest){
       const report=buildReport(user,rows,settings,rule.shift_day,new Date(rule.day_start),new Date(rule.day_end),now);
       const span=report.summary.branches.reduce((s,b)=>s+b.minutes,0)+report.summary.outsideMinutes+report.summary.unknownMinutes;
       const places=[...report.summary.branches.map(b=>({...b,percentage:span?Math.round(100*b.minutes/span):0})),{id:'outside',name:'خارج الفروع',minutes:report.summary.outsideMinutes,formatted:report.summary.outsideFormatted,percentage:span?Math.round(100*report.summary.outsideMinutes/span):0},{id:'unknown',name:'غير معلوم / فجوة تتبع',minutes:report.summary.unknownMinutes,formatted:report.summary.unknownFormatted,percentage:span?Math.round(100*report.summary.unknownMinutes/span):0}];
-      return {user:{id:user.id,name:user.name,username:user.username},...report,places,dayEnded:now>=new Date(rule.day_end)};
+      const ble=(await loadBleRangeSummaries([user.id],+new Date(rule.day_start)-86400000,+new Date(rule.day_end)+36*3600000,[rule.shift_day])).get(user.id);
+      return {user:{id:user.id,name:user.name,username:user.username},...report,places,dayEnded:now>=new Date(rule.day_end),...bleReportFields(ble?.daily?.[rule.shift_day])};
     }));
     return NextResponse.json({businessDay:day,boundary:settings.business_day_start_time,generatedAt:now.toISOString(),reports},{headers:{'Cache-Control':'private, no-store'}});
   }catch(e){console.error('Day close report',e);return NextResponse.json({error:'تعذر تحميل ملخص يوم العمل'},{status:503});}

@@ -6,12 +6,38 @@ import {verifiedBranchLocation,type StoreSettings} from '@/lib/geo';
 import {inTrackingWindow,type TrackingWindow} from '@/lib/tracking-window';
 import type {AttendanceReport} from '@/lib/attendance';
 import type {AppUser} from '@/lib/types';
+import type {BleUserPresence} from '@/lib/ble-types';
+import BlePresenceCard from './BlePresenceCard';
 export default function EmployeeTracker({user}:{user:AppUser}){
   const [report,setReport]=useState<AttendanceReport|null>(null),[settings,setSettings]=useState<StoreSettings|null>(null),[windows,setWindows]=useState<TrackingWindow[]>([]);
   const [enabled,setEnabled]=useState(false),[tracking,setTracking]=useState(false),[queued,setQueued]=useState(0),[message,setMessage]=useState(''),[ready,setReady]=useState(false),[now,setNow]=useState(0);
   const [position,setPosition]=useState<{lat:number;lng:number;accuracy:number}|null>(null);
+  const [presence,setPresence]=useState<BleUserPresence|null>(null),[presenceReady,setPresenceReady]=useState(false),[presenceError,setPresenceError]=useState('');
   const saving=useRef(false),lastSaved=useRef(0);
+  const presenceLoading=useRef(false);
   const key=`attendance-gps-consent-${user.id}`;
+  const bleAssigned=presence?.tracking_mode==='ble';
+  const refreshPresence=useCallback(async(signal?:AbortSignal)=>{
+    if(presenceLoading.current)return;
+    presenceLoading.current=true;
+    try{
+      const response=await fetch('/api/ble/self',{cache:'no-store',signal});
+      const data=await response.json();
+      if(!response.ok)throw new Error(data.error||'تعذر تحديث مصدر المتابعة');
+      if(!signal?.aborted){setPresence(data);setPresenceReady(true);setPresenceError('');localStorage.setItem(`attendance-presence-cache-${user.id}`,JSON.stringify(data));}
+    }catch(error){if(!signal?.aborted)setPresenceError(error instanceof Error?error.message:'تعذر تحديث مصدر المتابعة');}
+    finally{presenceLoading.current=false;}
+  },[user.id]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    queueMicrotask(()=>{
+      try{const cached=JSON.parse(localStorage.getItem(`attendance-presence-cache-${user.id}`)||'null');if(cached?.user?.id===user.id&&['ble','gps'].includes(cached.tracking_mode)){setPresence(cached);setPresenceReady(true);setPresenceError('تُعرض آخر نتيجة محفوظة حتى تحديث الاتصال.');}}catch{}
+      void refreshPresence(controller.signal);
+    });
+    const timer=setInterval(()=>void refreshPresence(controller.signal),15000);
+    const onOnline=()=>void refreshPresence(controller.signal);window.addEventListener('online',onOnline);
+    return()=>{controller.abort();clearInterval(timer);window.removeEventListener('online',onOnline);};
+  },[user.id,refreshPresence]);
   const refresh=useCallback(async()=>{
     try{
       setQueued((await pendingEvents(user.id)).length);
@@ -34,7 +60,7 @@ export default function EmployeeTracker({user}:{user:AppUser}){
     const stop=()=>{if(watch!==undefined){navigator.geolocation?.clearWatch(watch);watch=undefined;}setTracking(false);setPosition(null);};
     const check=()=>{
       setNow(Date.now());
-      if(!enabled||!inTrackingWindow(windows)){stop();return;}
+      if(!presenceReady||bleAssigned||!enabled||!inTrackingWindow(windows)){stop();return;}
       if(watch!==undefined)return;
       if(!navigator.geolocation){setMessage('الجهاز لا يدعم الموقع');return;}
       watch=navigator.geolocation.watchPosition(fix=>{
@@ -46,13 +72,16 @@ export default function EmployeeTracker({user}:{user:AppUser}){
       setTracking(true);
     };
     check();const timer=setInterval(check,1000);return()=>{clearInterval(timer);if(watch!==undefined)navigator.geolocation?.clearWatch(watch);};
-  },[ready,enabled,windows,settings?.ping_interval_secs,user.id,refresh]);
+  },[ready,presenceReady,bleAssigned,enabled,windows,settings?.ping_interval_secs,user.id,refresh]);
   const geo=position&&settings?verifiedBranchLocation(position.lat,position.lng,position.accuracy,settings):null;
   const current=windows.find(w=>now>=w.start&&now<w.end),next=windows.find(w=>w.start>now);
   return <div className="app-container employee-app"><div className="tracker-greeting"><div><p className="eyebrow">الحضور بالكارت · بتوقيت القاهرة</p><h2>مرحبًا، {user.name}</h2></div><ShieldCheck/></div>
-    <section className="card shift-card"><h2>سجّل الحضور والانصراف بكارتك في الفرع</h2><p>زر التتبع لا يسجل حضورًا أو انصرافًا. قراءة الكارت هي السجل الأساسي، وGPS للتحقق من الوجود بين حضور الكارت وانصرافه أو الحد الأقصى.</p><p><MapPin size={18}/>{tracking?geo?.branch_name||'التقاط الموقع بعد حضور الكارت':'جمع الموقع متوقف'}</p>
+    {presenceError&&<p className="tracker-warning" role="alert">{presenceError} {presence?'النتيجة المعروضة تحتاج تحديثًا.':'لن يبدأ جمع GPS قبل معرفة مصدر المتابعة.'}</p>}
+    {!presenceReady&&<section className="card" role="status"><p>جاري تحديد مصدر المتابعة لحسابك…</p><button className="btn btn-secondary" onClick={()=>void refreshPresence()}>إعادة المحاولة</button></section>}
+    {bleAssigned&&presence&&<section className="card shift-card"><h2>الحضور بالكارت والمتابعة بالتاج</h2><p>احمل التاج أثناء الشيفت. قارئ الفرع يرسل القراءات؛ الصفحة تعرض حالتك على Android أو iPhone حتى لو GPS مقفول.</p><BlePresenceCard presence={presence} stale={!!presenceError}/><button className="btn btn-secondary" onClick={()=>{void refresh();void refreshPresence();}}><RefreshCw size={16}/>تحديث الحضور والتاج</button><small className="muted">آخر تحديث: {new Date(presence.server_time).toLocaleString('ar-EG',{timeZone:'Africa/Cairo'})}</small></section>}
+    {presenceReady&&!bleAssigned&&<section className="card shift-card"><h2>سجّل الحضور والانصراف بكارتك في الفرع</h2><p>زر التتبع لا يسجل حضورًا أو انصرافًا. قراءة الكارت هي السجل الأساسي، وGPS للتحقق من الوجود بين حضور الكارت وانصرافه أو الحد الأقصى.</p><p><MapPin size={18}/>{tracking?geo?.branch_name||'التقاط الموقع بعد حضور الكارت':'جمع الموقع متوقف'}</p>
       <button className="btn btn-primary" disabled={!ready} onClick={()=>{const value=!enabled;setEnabled(value);localStorage.setItem(key,String(value));setMessage(value?'المتابعة جاهزة؛ GPS يبدأ بعد حضور الكارت':'تم إيقاف جمع الموقع؛ الحضور والانصراف بالكارت');}}>{enabled?'إيقاف متابعة الموقع':'تجهيز متابعة الموقع بعد حضور الكارت'}</button>
       <button className="btn btn-secondary" onClick={()=>void refresh()}><RefreshCw size={16}/>مزامنة وتحديث</button>
       <p className="muted">{current?'نهاية متابعة الموقع: '+new Date(current.end).toLocaleTimeString('ar-EG',{timeZone:'Africa/Cairo'}):next?'جلسة حضور مسجلة تبدأ: '+new Date(next.start).toLocaleString('ar-EG',{timeZone:'Africa/Cairo'}):'GPS ينتظر حضور الكارت؛ اتصل بالإنترنت لتحديث حالة القارئ'}</p><p>{queued} تحديثات موقع بانتظار المزامنة</p>{message&&<p role="status">{message}</p>}
-    </section><section className="card"><h3>ملخص الحضور بالكارت</h3><p>{report?.punctuality.message}</p>{report?.missingCheckout&&<p className="tracker-warning">ينقص انصراف الكارت؛ {report.provisionalMinutes} دقيقة مبدئية تنتظر اعتماد الانصراف.</p>}<div className="metrics-grid">{[['فترة الكارت المكتملة',report?.summary.cardFormatted],['داخل الفروع حسب GPS',report?.summary.totalFormatted],['الإضافي داخل الفروع',report?.summary.overtimeFormatted],['خروج أثناء الشيفت',report?.summary.outsideFormatted],['فجوات GPS',report?.summary.unknownFormatted]].map(([label,value])=><div className="metric" key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></section><p className="tracker-note">المتصفح يجمع الموقع أثناء فتحه. للتتبع مع قفل الشاشة استخدم تطبيق الهاتف المحدّث. قبل حضور الكارت وبعد الانصراف أو الحد الأقصى يتوقف GPS حتى لو المتابعة مفعّلة.</p></div>;
+    </section>}<section className="card"><h3>ملخص الحضور بالكارت{bleAssigned?' وبيانات GPS السابقة':''}</h3><p>{report?.punctuality.message}</p>{report?.missingCheckout&&<p className="tracker-warning">ينقص انصراف الكارت؛ {report.provisionalMinutes} دقيقة مبدئية تنتظر اعتماد الانصراف.</p>}<div className="metrics-grid">{[['فترة الكارت المكتملة',report?.summary.cardFormatted],...(!bleAssigned?[['داخل الفروع حسب GPS',report?.summary.totalFormatted],['الإضافي داخل الفروع حسب GPS',report?.summary.overtimeFormatted],['خارج الفروع حسب GPS',report?.summary.outsideFormatted],['فجوات GPS',report?.summary.unknownFormatted]]:[])].map(([label,value])=><div className="metric" key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div>{bleAssigned&&<details><summary>عينات GPS المسجلة اليوم</summary><p className="muted">هذه بيانات الموقع المسجلة، ولا تُضاف إلى وقت رصد التاج.</p><div className="metrics-grid">{[['داخل الفروع حسب GPS',report?.summary.totalFormatted],['خارج الفروع حسب GPS',report?.summary.outsideFormatted],['فجوات GPS',report?.summary.unknownFormatted]].map(([label,value])=><div className="metric" key={label}><span>{label}</span><strong>{value||'—'}</strong></div>)}</div></details>}</section>{presenceReady&&!bleAssigned&&<p className="tracker-note">المتصفح يجمع الموقع أثناء فتحه. للتتبع مع قفل الشاشة استخدم تطبيق الهاتف المحدّث. قبل حضور الكارت وبعد الانصراف أو الحد الأقصى يتوقف GPS حتى لو المتابعة مفعّلة.</p>}{bleAssigned&&<p className="tracker-note">المتابعة تأتي من التاج والقارئ؛ إغلاق الصفحة أو تطبيق الهاتف لا يوقف رصد التاج. انتهاء فترة الكارت يوقف احتساب المتابعة.</p>}</div>;
 }

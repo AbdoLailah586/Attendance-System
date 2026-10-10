@@ -3,11 +3,11 @@ import { getActiveSession } from '@/lib/auth';
 import { getPool, query } from '@/lib/db';
 import { addDays } from '@/lib/period-report';
 import { cairoTime, localDate, validDay } from '@/lib/time';
-import { BLE_STALE_SECONDS, bleAddress, ensureBleSchema, observationAt, observationReport, receiverState,
+import { BLE_STALE_SECONDS, bleAddress, combinedObservationReport, ensureBleSchema, observationAt, observationReport, receiverState,
   type BleEvent, type BleHeartbeat, type BleTag } from '@/lib/ble';
 
 const headers = { 'Cache-Control': 'private, no-store' };
-interface DeviceRow { id: string; name: string; branch_id: string; branch_name: string; is_active: boolean }
+interface DeviceRow { id: string; name: string; branch_id: string; branch_name: string; is_active: boolean; configured_at:string|Date|null }
 export async function GET(req: NextRequest) {
   try {
     if ((await getActiveSession(req))?.role !== 'admin') return NextResponse.json({ error: 'صلاحيات المدير مطلوبة' }, { status: 403 });
@@ -21,7 +21,9 @@ export async function GET(req: NextRequest) {
     const tagFilter = userId ? 'WHERE t.user_id=$1' : '', userFilter = userId ? 'WHERE id=$1' : "WHERE role='employee' OR EXISTS(SELECT 1 FROM ble_tags t WHERE t.user_id=users.id)";
     const [tagRows, devicesRows, liveHeartbeats, liveEvents, logs, count, heartbeats, events, users, windowRows, unknownTags] = await Promise.all([
       query<BleTag>(`SELECT t.*,u.name,u.username FROM ble_tags t JOIN users u ON u.id=t.user_id ${tagFilter} ORDER BY t.assigned_at,t.id`, userId ? [Number(userId)] : []),
-      query<DeviceRow>(`SELECT d.id,d.name,d.branch_id,d.is_active,b.name AS branch_name FROM nfc_devices d JOIN branches b ON b.id=d.branch_id ORDER BY d.created_at`),
+      query<DeviceRow>(`SELECT d.id,d.name,d.branch_id,(d.is_active AND b.is_active) AS is_active,b.name AS branch_name,
+        (SELECT MIN(h.recorded_at) FROM ble_receiver_heartbeats h WHERE h.device_id=d.id AND h.recorded_at<=NOW()) AS configured_at
+        FROM nfc_devices d JOIN branches b ON b.id=d.branch_id ORDER BY d.created_at`),
       query<BleHeartbeat>(`SELECT DISTINCT ON(device_id) * FROM ble_receiver_heartbeats WHERE recorded_at<=NOW() ORDER BY device_id,recorded_at DESC,id DESC`),
       query<BleEvent>(`SELECT DISTINCT ON(device_id,tag_address) * FROM ble_events WHERE recorded_at<=NOW() ORDER BY device_id,tag_address,recorded_at DESC,id DESC`),
       query(`SELECT e.*,u.name AS user_name,d.name AS device_name,b.name AS branch_name FROM ble_events e
@@ -69,7 +71,10 @@ export async function GET(req: NextRequest) {
       ...observationReport(tagRows.rows, truncated ? [] : events.rows, truncated ? [] : heartbeats.rows,
         windows.filter(w => w.user_id === user.id), device.id, user.id, from, to),
     }))).filter(r => r.session_seconds > 0);
-    return NextResponse.json({ tags, devices, logs: logs.rows, total: count.rows[0].total, page, unknown_tags: unknownTags.rows, reports,
+    const combinedReports=users.rows.filter(u=>tagRows.rows.some(t=>t.user_id===u.id)).map(user=>({user_id:user.id,user_name:user.name,
+      ...combinedObservationReport(tagRows.rows,truncated?[]:events.rows,truncated?[]:heartbeats.rows,windows.filter(w=>w.user_id===user.id),devicesRows.rows,user.id,from,to)
+    })).filter(report=>report.session_seconds>0);
+    return NextResponse.json({ tags, devices, logs: logs.rows, total: count.rows[0].total, page, unknown_tags: unknownTags.rows, reports,combined_reports:combinedReports,
       from_day: fromDay, to_day: toDay, receiver_stale_seconds: BLE_STALE_SECONDS, experimental: true, max_concurrent_tags: 3,
       truncated, server_time: new Date(now).toISOString(),
       meaning: 'رصد التاج أثناء فترة الكارت، وليس إثبات وجود الشخص أو غيابه. الفترات غير المرصودة للمراجعة ولا تخصم تلقائيًا.' }, { headers });

@@ -58,10 +58,10 @@ export default function Navbar({ user, onLogout }: NavbarProps) {
           </div>
           <div>
             <h1 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
-              نظام الحضور والانصراف الجغرافي
+              نظام الحضور والانصراف
             </h1>
             <p style={{ fontSize: '0.8rem', color: '#64748b' }}>
-              تتبع دقيق كل 60 ثانية بين الفروع
+              حضور بالكارت ومتابعة أثناء الشيفت
             </p>
           </div>
         </div>

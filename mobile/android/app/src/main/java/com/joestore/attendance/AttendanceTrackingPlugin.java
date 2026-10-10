@@ -29,9 +29,10 @@ public class AttendanceTrackingPlugin extends Plugin {
         try{call.resolve(new JSObject().put("token",store.token()));}catch(Exception e){call.reject("تعذر قراءة الجلسة");}
     }
     @PluginMethod public void status(PluginCall call){
-        try{JSObject result=new JSObject();String user=store.prefs.getString("user","");result.put("user",user.isEmpty()?JSONObject.NULL:new JSONObject(user));result.put("active",store.active());result.put("sessionOpen",store.allowed());result.put("tracking",store.active()&&store.allowed()&&TrackingService.collecting);result.put("pending",store.pending());result.put("error",store.prefs.getString("error",""));result.put("locationLabel",store.prefs.getString("locationLabel",""));result.put("lastPingAt",store.prefs.getLong("last_ping_at",0));result.put("lastSyncAt",store.prefs.getLong("last_sync_at",0));result.put("accuracy",store.prefs.getFloat("last_accuracy",0));result.put("trackingUntil",store.windowEnd());call.resolve(result);}catch(Exception e){call.reject("تعذر قراءة البيانات المحلية");}
+        try{JSObject result=new JSObject();String user=store.prefs.getString("user","");result.put("user",user.isEmpty()?JSONObject.NULL:new JSONObject(user));result.put("trackingSource",store.trackingSource());result.put("active",store.active());result.put("sessionOpen",store.allowed());result.put("tracking",store.active()&&store.allowed()&&TrackingService.collecting);result.put("pending",store.pending());result.put("error",store.prefs.getString("error",""));result.put("locationLabel",store.prefs.getString("locationLabel",""));result.put("lastPingAt",store.prefs.getLong("last_ping_at",0));result.put("lastSyncAt",store.prefs.getLong("last_sync_at",0));result.put("accuracy",store.prefs.getFloat("last_accuracy",0));result.put("trackingUntil",store.windowEnd());call.resolve(result);}catch(Exception e){call.reject("تعذر قراءة البيانات المحلية");}
     }
     @PluginMethod public void start(PluginCall call){
+        if("ble".equals(store.trackingSource())){call.reject("متابعة التاج تتم من قارئ الفرع؛ لا تحتاج تشغيل موقع الهاتف");return;}
         if(starting){call.reject("انتظر التقاط GPS");return;}
         if(getPermissionState("location")!=PermissionState.GRANTED){
             requestPermissionForAliases(Build.VERSION.SDK_INT>=33?new String[]{"location","notifications"}:new String[]{"location"},call,"permissionsResult");return;
@@ -44,6 +45,7 @@ public class AttendanceTrackingPlugin extends Plugin {
     }
     private void begin(PluginCall call){
         try {
+            if("ble".equals(store.trackingSource())){call.reject("متابعة التاج تتم من قارئ الفرع؛ لا تحتاج تشغيل موقع الهاتف");return;}
             if(!new JSONObject(store.prefs.getString("user","{}")).optString("role").equals("employee")){call.reject("حساب موظف مطلوب");return;}
             if(androidx.core.content.ContextCompat.checkSelfPermission(getContext(),Manifest.permission.ACCESS_FINE_LOCATION)!=android.content.pm.PackageManager.PERMISSION_GRANTED){call.reject("فعّل الموقع الدقيق من إعدادات التطبيق، وليس الموقع التقريبي فقط");return;}
             if(!store.hasSchedule()){call.reject("اتصل بالإنترنت لتحديث مواعيد الشيفت أولًا");return;}
