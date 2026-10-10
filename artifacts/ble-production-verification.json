@@ -1,0 +1,29 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "commit": "e2e4ecf31d2e55f282be6761693b164d6d0e3465",
+  "run_at": "2026-10-10T13:04:51.542Z",
+  "completed": true,
+  "checks": [
+    "BLE management requires administrator access",
+    "Employee credentials cannot administer BLE or impersonate a receiver",
+    "Receiver configuration validates reader ID and device token",
+    "Unknown tag diagnostics retain capture/receipt times and acknowledge retries once",
+    "Unassigned hardware appears for administrator binding without selecting an employee",
+    "Binding is normalized, exclusive and does not rewrite unknown historical scans",
+    "Without NFC arrival, assigned tags remain disabled and raw events have no employee identity",
+    "Official NFC arrival opens BLE configuration with an explicit tracking deadline",
+    "Administrator grace setting is editable and constrained to 60–600 seconds",
+    "Invalid credentials, addresses, event IDs, RSSI, future clocks and oversized batches are rejected",
+    "Captured BLE timeline uses reader branch and counts explicit loss once without adding a second grace",
+    "Faults, recovery without a fresh tag reading and stale receiver periods remain unknown inside card sessions",
+    "Fresh connected-tag observation appears live and repeated upload is idempotent",
+    "Reader fault overrides tag state and recovery requires a fresh explicit observation",
+    "Reboot cannot reuse observations from the previous receiver boot",
+    "Receiver/network heartbeat loss becomes unknown rather than inferred absence",
+    "Maximum tracking cap disables BLE tracking without manufacturing an NFC checkout",
+    "NFC checkout stops interpretation and subsequent diagnostics cannot extend employee hours",
+    "Reassignment preserves capture-time ownership for delayed offline events",
+    "Administrator period and page validation prevents invalid reports",
+    "BLE creates no attendance actions, GPS logs or wage deductions"
+  ]
+}

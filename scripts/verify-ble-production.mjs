@@ -12,6 +12,8 @@ const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { re
 const users = [], devices = [], tags = [], checks = [];
 let admin, token, reader, tag, user, boot = randomUUID();
 const timelineBoot = boot;
+let captureClockOffset = 0;
+const captureNow = () => new Date(Date.now() + captureClockOffset);
 const pass = name => { checks.push(name); console.log('PASS ' + name); };
 const date = at => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
 const time = at => new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at);
@@ -23,10 +25,10 @@ async function call(path, credential, data, method = data ? 'POST' : 'GET') {
 }
 const operation = body => call('/api/ble/admin', admin, body);
 const config = credential => call('/api/ble/config?device_id=' + reader.device_id, credential ?? reader.token);
-const event = (state, at = new Date(), extra = {}) => ({ event_id: randomUUID(), tag_address: tag.address, state, recorded_at: at.toISOString(), boot_id: boot, ...(state === 'seen' ? { rssi: -55 } : {}), ...extra });
-const send = (events = [], state = 'ready', at = new Date(), extra = {}, credential) => call('/api/ble/events', credential ?? reader.token,
+const event = (state, at = captureNow(), extra = {}) => ({ event_id: randomUUID(), tag_address: tag.address, state, recorded_at: at.toISOString(), boot_id: boot, ...(state === 'seen' ? { rssi: -55 } : {}), ...extra });
+const send = (events = [], state = 'ready', at = captureNow(), extra = {}, credential) => call('/api/ble/events', credential ?? reader.token,
   { device_id: reader.device_id, boot_id: boot, receiver_state: state, heartbeat_at: at.toISOString(), events, ...extra });
-const scan = (uid, at = new Date()) => call('/api/nfc/events', reader.token, { device_id: reader.device_id, events: [{ event_id: randomUUID(), card_uid: uid, recorded_at: at.toISOString() }] });
+const scan = (uid, at = captureNow()) => call('/api/nfc/events', reader.token, { device_id: reader.device_id, events: [{ event_id: randomUUID(), card_uid: uid, recorded_at: at.toISOString() }] });
 const getAdmin = async () => {
   const response = await call('/api/ble/admin?from_day=' + date(base) + '&to_day=' + date(new Date()) + '&user_id=' + user.id, admin);
   assert.equal(response.status, 200, JSON.stringify(response.body)); return response.body;
@@ -55,7 +57,11 @@ try {
   assert.equal((await call('/api/ble/admin', token)).status, 403);
   assert.equal((await call('/api/ble/admin', token, { action: 'assign_tag' })).status, 403);
   assert.equal((await config(token)).status, 401); pass('Employee credentials cannot administer BLE or impersonate a receiver');
-  assert.equal((await config()).status, 200);
+  const initialConfig = await config(); assert.equal(initialConfig.status, 200);
+  // Windows wall time can run ahead of UTC. Use the deployment's clock for
+  // synthetic captures, conservatively behind the response by half a second.
+  // Keep this offset fixed so adjacent state transitions remain monotonic.
+  captureClockOffset = Date.parse(initialConfig.body.server_time) - Date.now() - 500;
   assert.equal((await config('B'.repeat(43))).status, 401);
   assert.equal((await call('/api/ble/config?device_id=bad', reader.token)).status, 400); pass('Receiver configuration validates reader ID and device token');
   tag = { address: address() };
@@ -90,11 +96,11 @@ try {
   assert.equal((await operation({ action: 'set_grace', id: tag.id, grace_seconds: 600 })).status, 200);
   assert.equal((await config()).body.tags.find(t => t.address === tag.address).grace_seconds, 600);
   assert.equal((await operation({ action: 'set_grace', id: tag.id, grace_seconds: 90 })).status, 200); pass('Administrator grace setting is editable and constrained to 60–600 seconds');
-  assert.equal((await send([event('seen')], 'ready', new Date(), {}, 'B'.repeat(43))).status, 401);
-  assert.equal((await send([event('seen', new Date(), { tag_address: 'not-a-tag' })])).status, 400);
-  assert.equal((await send([event('seen', new Date(), { event_id: 'bad' })])).status, 400);
-  assert.equal((await send([event('seen', new Date(), { rssi: -200 })])).status, 400);
-  assert.equal((await send([event('seen', new Date(Date.now() + 180000))])).status, 400);
+  assert.equal((await send([event('seen')], 'ready', captureNow(), {}, 'B'.repeat(43))).status, 401);
+  assert.equal((await send([event('seen', captureNow(), { tag_address: 'not-a-tag' })])).status, 400);
+  assert.equal((await send([event('seen', captureNow(), { event_id: 'bad' })])).status, 400);
+  assert.equal((await send([event('seen', captureNow(), { rssi: -200 })])).status, 400);
+  assert.equal((await send([event('seen', new Date(+captureNow() + 180000))])).status, 400);
   assert.equal((await send(Array.from({ length: 101 }, () => event('seen')))).status, 400);
   pass('Invalid credentials, addresses, event IDs, RSSI, future clocks and oversized batches are rejected');
   // Remove only this QA receiver's earlier diagnostic heartbeats before its controlled timeline.
@@ -114,18 +120,18 @@ try {
   assert.deepEqual(stored.map(r => r.branch_id), ['branch2']);
   pass('Captured BLE timeline uses reader branch and counts explicit loss once without adding a second grace');
   pass('Faults, recovery without a fresh tag reading and stale receiver periods remain unknown inside card sessions');
-  let at = new Date(); result = await send([event('seen', at)], 'ready', at); assert.equal(result.status, 200);
+  let at = captureNow(); result = await send([event('seen', at)], 'ready', at); assert.equal(result.status, 200);
   data = await getAdmin(); assert.equal(currentObservation(data).state, 'seen'); assert.equal(currentObservation(data).in_card_session, true);
-  const repeat = event('seen', new Date()); result = await send([repeat]); assert.equal(result.status, 200);
+  const repeat = event('seen', captureNow()); result = await send([repeat]); assert.equal(result.status, 200);
   result = await send([repeat]); assert.equal(result.body.acknowledged[0].duplicate, true);
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM ble_events WHERE device_id=$1 AND event_id=$2', [reader.device_id, repeat.event_id])).rows[0].n, 1);
   pass('Fresh connected-tag observation appears live and repeated upload is idempotent');
   result = await send([], 'fault'); assert.equal(result.status, 200); data = await getAdmin(); assert.equal(currentObservation(data).state, 'unknown');
   result = await send([], 'ready'); assert.equal(result.status, 200); data = await getAdmin(); assert.equal(currentObservation(data).state, 'unknown');
-  at = new Date(); result = await send([event('not_seen', at)], 'ready', at); assert.equal(result.status, 200);
+  at = captureNow(); result = await send([event('not_seen', at)], 'ready', at); assert.equal(result.status, 200);
   data = await getAdmin(); assert.equal(currentObservation(data).state, 'not_seen'); pass('Reader fault overrides tag state and recovery requires a fresh explicit observation');
   boot = randomUUID(); result = await send(); assert.equal(result.status, 200); data = await getAdmin(); assert.equal(currentObservation(data).state, 'unknown');
-  at = new Date(); result = await send([event('seen', at)], 'ready', at); assert.equal(result.status, 200);
+  at = captureNow(); result = await send([event('seen', at)], 'ready', at); assert.equal(result.status, 200);
   data = await getAdmin(); assert.equal(currentObservation(data).state, 'seen'); pass('Reboot cannot reuse observations from the previous receiver boot');
   await pool.query("UPDATE ble_receiver_heartbeats SET recorded_at=NOW()-INTERVAL '91 seconds',received_at=NOW()-INTERVAL '91 seconds' WHERE device_id=$1 AND recorded_at>NOW()-INTERVAL '90 seconds'", [reader.device_id]);
   data = await getAdmin(); assert.equal(data.devices.find(d => d.id === reader.device_id).receiver_state, 'stale'); assert.equal(currentObservation(data).state, 'unknown');
