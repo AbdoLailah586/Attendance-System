@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-// These pins are free with BOTH LCD wiring modes and RC522's SPI wiring.
+// These pins do not conflict with RC522's SPI wiring.
 #ifndef FEEDBACK_ENABLED
 #define FEEDBACK_ENABLED 1
 #endif

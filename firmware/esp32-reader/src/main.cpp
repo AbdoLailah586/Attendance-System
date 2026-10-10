@@ -15,7 +15,6 @@
 #else
 #include "config.example.h"
 #endif
-#include "display.h"
 #include "feedback.h"
 MFRC522 reader(21,22);
 struct ScreenMessage {char event[37];char name[64];char action[32];FeedbackResult feedback;};
@@ -26,23 +25,18 @@ bool diskReady=false;
 String lastCard;
 unsigned long lastCardSeen=0,ledAt=0;
 bool storageFault=false,ledActive=false;
-constexpr const char* FIRMWARE_VERSION="1.3.0";
+constexpr const char* FIRMWARE_VERSION="1.4.0";
 String wifiSsid,wifiPassword,serialCommand;
-String idleScreenState;
 bool storedWifi=false,serialOverflow=false;
 byte readerVersion=0;
+String eventUuid();
+time_t utcNow();
+#include "ble_presence.h"
 void emitSerialJson(JsonDocument& document){
   String line;serializeJson(document,line);line+='\n';
   // A single UART write keeps upload-task log messages out of a JSON response.
   Serial.write(reinterpret_cast<const uint8_t*>(line.c_str()),line.length());
 }
-void updateIdleScreen(){
-  if(lastTapId.length())return;
-  String state=!diskReady?"STORAGE ERROR":readerVersion==0||readerVersion==0xFF?"RC522 ERROR":
-    WiFi.status()!=WL_CONNECTED?"WAITING FOR WIFI":time(nullptr)<=1700000000?"SYNCING CLOCK":"READY / SCAN";
-  if(state!=idleScreenState){idleScreenState=state;lcdShow("Attendance RC522",state);}
-}
-
 bool validWifi(const String& ssid,const String& password){
   if(ssid.length()==0||ssid.length()>32)return false;
   for(size_t i=0;i<ssid.length();i++)if(ssid[i]=='\0')return false;
@@ -70,13 +64,14 @@ void printStatus(){
   if(WiFi.status()==WL_CONNECTED)status["rssi_dbm"]=WiFi.RSSI();
   status["clock_ready"]=time(nullptr)>1700000000;status["storage_ready"]=diskReady;status["storage_fault"]=storageFault;
   status["rc522_version"]=readerVersion;status["rc522_detected"]=readerVersion!=0&&readerVersion!=0xFF;
-  status["lcd_mode"]=LCD_MODE;status["lcd_ready"]=lcdReady;status["uptime_ms"]=millis();status["free_heap_bytes"]=ESP.getFreeHeap();
+  status["uptime_ms"]=millis();status["free_heap_bytes"]=ESP.getFreeHeap();
+  status["minimum_free_heap_bytes"]=ESP.getMinFreeHeap();status["largest_free_heap_block"]=ESP.getMaxAllocHeap();
   status["feedback_enabled"]=FEEDBACK_ENABLED!=0;status["arrival_led"]=FEEDBACK_ARRIVAL_IS_RED?"red":"green";
   status["buzzer_type"]=BUZZER_PASSIVE?"passive":"active";status["feedback_test_running"]=feedbackTesting;
   unsigned queued=0;xSemaphoreTake(diskLock,portMAX_DELAY);
   File directory=diskReady?LittleFS.open("/queue"):File();
   if(directory){File file=directory.openNextFile();while(file){if(String(file.name()).endsWith(".json"))queued++;file.close();file=directory.openNextFile();}directory.close();}
-  xSemaphoreGive(diskLock);status["queued_events"]=queued;emitSerialJson(status);
+  xSemaphoreGive(diskLock);status["queued_events"]=queued;bleWriteStatus(status);emitSerialJson(status);
 }
 void handleSerialCommand(const String& command){
   if(command=="--status"){printStatus();return;}
@@ -85,11 +80,13 @@ void handleSerialCommand(const String& command){
   }
   if(command=="--format"){
     xSemaphoreTake(diskLock,portMAX_DELAY);LittleFS.end();bool ok=LittleFS.format();diskReady=ok&&LittleFS.begin(false);
-    if(diskReady)LittleFS.mkdir("/queue");storageFault=!diskReady;xSemaphoreGive(diskLock);
+    if(diskReady){LittleFS.mkdir("/queue");LittleFS.mkdir("/blequeue");bleQueued=0;bleForeignQueued=0;}storageFault=!diskReady;xSemaphoreGive(diskLock);
     Serial.println(diskReady?"Formatted. Existing queue erased.":"Format failed.");return;
   }
   JsonDocument request,response;response["command"]="wifi_config";response["ok"]=false;
-  if(deserializeJson(request,command)||request["command"]!="wifi_config"){response["error"]="invalid_command";}
+  bool parsed=!deserializeJson(request,command);
+  if(parsed&&bleHandleCommand(request,response)){emitSerialJson(response);return;}
+  if(!parsed||request["command"]!="wifi_config"){response["error"]="invalid_command";}
   else if(request["device_id"].as<String>()!=DEVICE_ID){response["error"]="wrong_reader";}
   else if(!request["ssid"].is<String>()||!request["password"].is<String>()){response["error"]="invalid_wifi";}
   else{
@@ -102,7 +99,7 @@ void handleSerialCommand(const String& command){
       if(!persisted)response["error"]="storage_failed";
       else{
         wifiSsid=ssid;wifiPassword=password;storedWifi=true;WiFi.disconnect(false,false);WiFi.begin(wifiSsid.c_str(),wifiPassword.c_str());
-        response["ok"]=true;lastTapId="";idleScreenState="";lcdShow("WIFI UPDATED","CONNECTING...");
+        response["ok"]=true;lastTapId="";
       }
     }
   }
@@ -145,7 +142,7 @@ void saveTap(const String& card){
   Serial.printf("Card %s: %s%s\n",card.c_str(),ok?"SAVED ":"NOT SAVED - STORAGE ERROR ",ok?id.c_str():"");
   if(!captured)Serial.println("Capture time unknown: server will keep this tap for administrator review.");
   if(ok){ledAt=millis();ledActive=true;}
-  lastTapId=id;lcdShow(card,ok?(captured?"SAVED / WAIT ACK":"SAVED / NO CLOCK"):"STORAGE ERROR");
+  lastTapId=id;
 }
 void readCards(){
   byte atqa[2],size=2;auto status=reader.PICC_WakeupA(atqa,&size);
@@ -175,9 +172,9 @@ void uploadTask(void*){
       f.close();f=directory.openNextFile();
     }directory.close();}
     xSemaphoreGive(diskLock);
-    if(events.size()==0){vTaskDelay(pdMS_TO_TICKS(5000));continue;}
+    if(events.size()==0){bleNetworkCycle();vTaskDelay(pdMS_TO_TICKS(1000));continue;}
     WiFiClientSecure tls;tls.setCACert(TRUSTED_ROOTS);tls.setHandshakeTimeout(10);
-    HTTPClient http;http.setConnectTimeout(8000);http.setTimeout(8000);http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    HTTPClient http;http.setReuse(false);http.setConnectTimeout(8000);http.setTimeout(8000);http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
     if(!http.begin(tls,API_URL)){vTaskDelay(pdMS_TO_TICKS(5000));continue;}
     http.addHeader("Content-Type","application/json");http.addHeader("Authorization",String("Bearer ")+DEVICE_TOKEN);
     String body;serializeJson(request,body);int code=http.POST(body);
@@ -190,9 +187,10 @@ void uploadTask(void*){
           if(sent&&id.length()==36){LittleFS.remove("/queue/"+id+".json");Serial.printf("Server saved %s (%s)\n",id.c_str(),ack["status"]|"unknown");
             ScreenMessage message{};strlcpy(message.event,id.c_str(),sizeof(message.event));strlcpy(message.name,ack["display_name"]|"Unknown card",sizeof(message.name));
             String type=ack["event_type"]|"",state=ack["status"]|"";
+            if(state=="accepted"&&(type=="clock_in"||type=="clock_out"))bleConfigAt=0;
             message.feedback=state=="accepted"?(type=="clock_in"?FeedbackResult::Arrival:type=="clock_out"?FeedbackResult::Departure:type=="refresh"?FeedbackResult::Refresh:FeedbackResult::Review):
               state=="rapid_repeat"||state=="duplicate_action"?FeedbackResult::Refresh:state=="after_checkout"?FeedbackResult::AlreadyOut:FeedbackResult::Review;
-            const char* action=message.feedback==FeedbackResult::Arrival?"IN / GPS PENDING":message.feedback==FeedbackResult::Departure?"CHECK OUT":
+            const char* action=message.feedback==FeedbackResult::Arrival?"CHECK IN":message.feedback==FeedbackResult::Departure?"CHECK OUT":
               message.feedback==FeedbackResult::Refresh?"ALREADY IN":message.feedback==FeedbackResult::AlreadyOut?"ALREADY OUT":"ADMIN REVIEW";
             strlcpy(message.action,action,sizeof(message.action));xQueueSend(screenMessages,&message,0);
           }
@@ -200,7 +198,8 @@ void uploadTask(void*){
         xSemaphoreGive(diskLock);
       }
     }else Serial.printf("Upload %d; queued taps retained.\n",code);
-    http.end();vTaskDelay(pdMS_TO_TICKS(code==200?1000:10000));
+    http.end();tls.stop();bleNetworkCycle(); // NFC takes priority; BLE shares this worker's TLS allocation.
+    vTaskDelay(pdMS_TO_TICKS(code==200?1000:10000));
   }
 }
 void setup(){
@@ -208,11 +207,12 @@ void setup(){
   feedbackBegin();
   diskReady=LittleFS.begin(false); // Never autoformat and lose queued taps.
   if(diskReady)LittleFS.mkdir("/queue");else{storageFault=true;Serial.println("LittleFS unavailable. Format only a NEW device with the explicit --format command.");}
-  screenMessages=xQueueCreate(30,sizeof(ScreenMessage));lcdBegin();lcdShow("Attendance RC522","WAITING FOR WIFI");
+  screenMessages=xQueueCreate(30,sizeof(ScreenMessage));
   SPI.begin(18,19,23,21);reader.PCD_Init();readerVersion=reader.PCD_ReadRegister(MFRC522::VersionReg);
-  if(readerVersion==0||readerVersion==0xFF){Serial.println("RC522 not detected; check 3.3V and SPI wiring.");lcdShow("RC522 ERROR","CHECK 3V3 / SPI");}
+  if(readerVersion==0||readerVersion==0xFF)Serial.println("RC522 not detected; check 3.3V and SPI wiring.");
   loadWifi();WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);WiFi.begin(wifiSsid.c_str(),wifiPassword.c_str());
   configTime(0,0,"time.google.com","pool.ntp.org");
+  bleBegin(); // Allocate BLE before any HTTPS handshake starts.
   xTaskCreatePinnedToCore(uploadTask,"upload",16384,nullptr,1,nullptr,0);
   Serial.println("Reader ready; waiting for Internet time. Untimed taps are saved for review, never assigned a guessed time.");
   Serial.printf("Firmware %s; USB Wi-Fi settings available.\n",FIRMWARE_VERSION);
@@ -220,12 +220,11 @@ void setup(){
 }
 void loop(){
   readCards();
-  ScreenMessage screen;while(xQueueReceive(screenMessages,&screen,0)==pdTRUE)if(lastTapId==screen.event){lcdShow(screen.name,screen.action);feedbackShow(screen.feedback);}
+  ScreenMessage screen;while(xQueueReceive(screenMessages,&screen,0)==pdTRUE)if(lastTapId==screen.event){Serial.printf("NFC %s: %s\n",screen.name,screen.action);feedbackShow(screen.feedback);}
   unsigned long now=millis();
   if(ledActive&&now-ledAt>=200)ledActive=false; // Safe across millis() rollover during continuous operation.
   digitalWrite(STATUS_LED,storageFault?(now/150)%2:!utcNow()?(now/500)%2:ledActive?HIGH:WiFi.status()!=WL_CONNECTED&&now%2000<50);
   readSerialCommands();
-  updateIdleScreen();
   feedbackTick(millis()); // No sound/light delays that block card scanning or uploads.
   delay(30);
 }

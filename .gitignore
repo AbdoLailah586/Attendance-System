@@ -48,3 +48,6 @@ firmware/**/include/config.h
 
 firmware/**/include/attendance-config.h
 scripts/__pycache__/
+artifacts/itag-ble-probe.json
+artifacts/itag-reader-production-verification.json
+artifacts/itag-reader-usb-verification.json

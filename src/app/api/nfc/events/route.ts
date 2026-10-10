@@ -57,7 +57,7 @@ export async function POST(req:NextRequest){
       for(const a of affected.values())await reconcileDay(client,a.user,a.day);
       const details=(await client.query(`SELECT s.id,s.status,s.event_type,to_char(s.business_day,'YYYY-MM-DD') AS business_day,u.name,u.username
         FROM nfc_scans s LEFT JOIN users u ON u.id=s.user_id WHERE s.id=ANY($1::bigint[])`,[acknowledged.map(a=>a.scan_id)])).rows;
-      const replies=acknowledged.map(a=>{const d=details.find(d=>String(d.id)===String(a.scan_id));return {...a,...d,display_name:d?.username||'Unknown card',verification:'GPS required'};});
+      const replies=acknowledged.map(a=>{const d=details.find(d=>String(d.id)===String(a.scan_id));return {...a,...d,display_name:d?.username||'Unknown card',verification:'Presence observation separate from card attendance'};});
       await client.query('UPDATE nfc_devices SET last_seen_at=NOW() WHERE id=$1',[device.id]);
       await client.query('COMMIT');
       return NextResponse.json({success:true,acknowledged:replies,server_time:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}});
