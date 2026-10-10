@@ -33,7 +33,9 @@ export async function GET(req:NextRequest){
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp<$2 AND event_type IN ('clock_in','clock_out') ORDER BY timestamp DESC,id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp >=$2 AND timestamp<$3) ORDER BY timestamp,id`,[user.id,from.toISOString(),to.toISOString()]);
       const report=buildPeriodReport(user,history,result.rows,settings,range.start,range.end);
-      const ble=(await loadBleRangeSummaries([user.id],+from,+to,report.days.map(day=>day.date))).get(user.id);
+      // A late arrival on the final shift day can run for the configured 36-hour cap.
+      const bleEnd=+cairoTime(addDays(range.end,1))+36*3600000;
+      const ble=(await loadBleRangeSummaries([user.id],+from,bleEnd,report.days.map(day=>day.date))).get(user.id);
       return {...report,...bleReportFields(ble),days:report.days.map(day=>({...day,...bleReportFields(ble?.daily?.[day.date])}))};
     }));
     return NextResponse.json({mode,anchor,start:mode==='monthly'?null:start,end:mode==='monthly'?null:end,timeZone:TIME_ZONE,generatedAt:new Date().toISOString(),settings,reports},{headers:{'Cache-Control':'private, no-store'}});
