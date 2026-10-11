@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { uuid } from '@/lib/nfc';
+import { BLE_READER_CAPACITY } from '@/lib/ble-types';
 import { BLE_DEFAULT_GRACE, BLE_HEARTBEAT_SECONDS, BLE_STALE_SECONDS, activeCardSession, ensureBleSchema, readerFor } from '@/lib/ble';
 
 export async function GET(req: NextRequest) {
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest) {
       }
       return NextResponse.json({ protocol: 'attendance-ble-v1', mode: 'experimental', heartbeat_seconds: BLE_HEARTBEAT_SECONDS,
         receiver_stale_seconds: BLE_STALE_SECONDS, default_grace_seconds: BLE_DEFAULT_GRACE, tags,
-        capacity_exceeded: tags.filter(t => t.enabled).length > 4, target_reader_capacity: 4, server_time: new Date().toISOString() },
+        capacity_exceeded: tags.filter(t => t.enabled).length > BLE_READER_CAPACITY, target_reader_capacity: BLE_READER_CAPACITY, server_time: new Date().toISOString() },
       { headers: { 'Cache-Control': 'private, no-store' } });
     } finally { client.release(); }
   } catch (error) { console.error('BLE config', error); return NextResponse.json({ error: 'Configuration temporarily unavailable' }, { status: 503 }); }

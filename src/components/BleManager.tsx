@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { AppUser } from '@/lib/types';
+import { BLE_READER_CAPACITY } from '@/lib/ble-types';
 import { localDate } from '@/lib/time';
 import { bleDuration } from './BlePresenceCard';
 
@@ -54,7 +55,7 @@ export default function BleManager({ users }: { users: AppUser[] }) {
   return <section style={{ display: 'grid', gap: 16 }}>
     <div className="card" style={{ padding: 20 }}>
       <div className="section-title"><h3>رصد التاج بالبلوتوث · تجربة عملية</h3><button className="btn btn-secondary" onClick={() => void load()}>تحديث</button></div>
-      <p>رصد الإشارة أثناء الفترة بين حضور الكارت والانصراف أو الحد الأقصى. الكروت تظل مصدر الحضور والانصراف. إصدار القارئ 1.4.1 يدعم حتى 4 تاجات؛ الإصدارات الأقدم تحتاج تحديثًا. نجاح اتصال الأربعة يتأكد بالاختبار الفعلي.</p>
+      <p>رصد الإشارة أثناء الفترة بين حضور الكارت والانصراف أو الحد الأقصى. الكروت تظل مصدر الحضور والانصراف. إصدار القارئ 1.4.3 يدعم حتى {BLE_READER_CAPACITY} تاجات؛ الإصدارات الأقدم تحتاج تحديثًا. نجاح اتصال الخمسة يتأكد بالاختبار الفعلي. يمكن ربط تاجات إضافية، لكن رصد أكثر من خمسة معًا يحتاج زيادة سعة القارئ واختبارها.</p>
       <p style={{ color: '#92400e' }}>وجود التاج لا يثبت وجود صاحبه. فقد الإشارة يظهر للمراجعة، وعطل القارئ أو انقطاع اتصاله يظهر «غير معلوم». هذه الفترات لا تُخصم تلقائيًا من الأجر.</p>
       {error && <p role="alert" style={{ color: '#b91c1c' }}>{error}</p>}
       <div className="metrics-grid">{data?.devices.map(device => <div key={device.id} style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 14 }}>

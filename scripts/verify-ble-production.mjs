@@ -87,8 +87,8 @@ try {
   assert.equal((await call('/api/ble/self?user_id='+user.id,second.token)).status,403);
   pass('Employee self presence is isolated and unassigned users retain GPS mode');
   const initialConfig = await config(); assert.equal(initialConfig.status, 200);
-  assert.equal(initialConfig.body.target_reader_capacity,4);
-  assert.equal((await call('/api/ble/admin',admin)).body.max_concurrent_tags,4);
+  assert.equal(initialConfig.body.target_reader_capacity,5);
+  assert.equal((await call('/api/ble/admin',admin)).body.max_concurrent_tags,5);
   // Windows wall time can run ahead of UTC. Use the deployment's clock for
   // synthetic captures, conservatively behind the response by half a second.
   // Keep this offset fixed so adjacent state transitions remain monotonic.

@@ -20,15 +20,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", required=True)
     parser.add_argument("--expected-device", required=True)
-    parser.add_argument("--address", action="append", default=[], help="Repeat for up to four tags (firmware 1.4.2+)")
+    parser.add_argument("--address", action="append", default=[], help="Repeat for each tag, within the connected reader capacity")
     parser.add_argument("--clear", action="store_true")
     parser.add_argument("--grace-seconds", type=int, default=90)
     parser.add_argument("--duration-seconds", type=int, default=900)
     args = parser.parse_args()
     if not args.clear and not args.address:
         parser.error("--address is required unless --clear is selected")
-    if len(args.address) > 4 or len(set(address.upper() for address in args.address)) != len(args.address):
-        parser.error("Use at most four distinct addresses")
+    if len(set(address.upper() for address in args.address)) != len(args.address):
+        parser.error("Use distinct addresses")
     port = serial.Serial()
     port.port, port.baudrate = args.port, 115200
     port.timeout, port.write_timeout = 0.25, 3
@@ -42,6 +42,9 @@ def main():
             raise RuntimeError("Wrong branch reader. No settings changed.")
         if not status.get("ble_enabled"):
             raise RuntimeError("Install BLE reader firmware 1.4.0 or newer first.")
+        capacity = int(status.get("ble_max_connections", 1))
+        if len(args.address) > capacity:
+            raise RuntimeError(f"Reader supports {capacity} simultaneous tags. Upgrade firmware before testing more.")
         if len(args.address) > 1 and tuple(int(part) for part in status.get("firmware", "0.0.0").split(".")) < (1, 4, 2):
             raise RuntimeError("Multiple diagnostic targets require firmware 1.4.2 or newer.")
         command = {"command": "ble_test_config", "device_id": args.expected_device,
