@@ -1,7 +1,7 @@
 """Temporary, explicit BLE range test on one USB-connected reader.
 
-Uses firmware 1.4's test target without changing employee attendance or pairing.
-The target expires in at most 30 minutes and is not retained after restart.
+Uses firmware USB targets without changing employee attendance or pairing.
+Targets expire in at most 30 minutes and are not retained after restart.
 """
 import argparse
 import importlib.util
@@ -20,13 +20,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", required=True)
     parser.add_argument("--expected-device", required=True)
-    parser.add_argument("--address")
+    parser.add_argument("--address", action="append", default=[], help="Repeat for up to four tags (firmware 1.4.2+)")
     parser.add_argument("--clear", action="store_true")
     parser.add_argument("--grace-seconds", type=int, default=90)
     parser.add_argument("--duration-seconds", type=int, default=900)
     args = parser.parse_args()
     if not args.clear and not args.address:
         parser.error("--address is required unless --clear is selected")
+    if len(args.address) > 4 or len(set(address.upper() for address in args.address)) != len(args.address):
+        parser.error("Use at most four distinct addresses")
     port = serial.Serial()
     port.port, port.baudrate = args.port, 115200
     port.timeout, port.write_timeout = 0.25, 3
@@ -40,9 +42,13 @@ def main():
             raise RuntimeError("Wrong branch reader. No settings changed.")
         if not status.get("ble_enabled"):
             raise RuntimeError("Install BLE reader firmware 1.4.0 or newer first.")
+        if len(args.address) > 1 and tuple(int(part) for part in status.get("firmware", "0.0.0").split(".")) < (1, 4, 2):
+            raise RuntimeError("Multiple diagnostic targets require firmware 1.4.2 or newer.")
         command = {"command": "ble_test_config", "device_id": args.expected_device,
-                   "enabled": not args.clear, "address": (args.address or "").upper(),
+                   "enabled": not args.clear, "address": args.address[0].upper() if args.address else "",
                    "grace_seconds": args.grace_seconds, "duration_seconds": args.duration_seconds}
+        if len(args.address) > 1:
+            command["addresses"] = [address.upper() for address in args.address]
         result = reader_usb.reply(port, json.dumps(command, separators=(",", ":")), "ble_test_config")
         if not result.get("ok"):
             raise RuntimeError("Reader rejected test target: " + str(result.get("error", "unknown")))

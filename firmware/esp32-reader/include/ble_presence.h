@@ -25,7 +25,9 @@ bool bleRadioReady=false,bleQueueFault=false,bleOverCapacity=false;
 unsigned long bleWorkerAt=0,bleLastAckAt=0,bleConfigAt=0,bleNetworkAt=0;
 int bleLastHttpCode=0;
 unsigned bleQueued=0,bleForeignQueued=0;
-String bleBootId,bleConfigSource="none",bleTestAddress;
+String bleBootId,bleConfigSource="none";
+String bleTestAddresses[BLE_MAX_TAGS];
+unsigned bleTestCount=0;
 const char* bleRadioError="starting";
 uint16_t bleTestGrace=90;
 unsigned long bleTestStarted=0,bleTestDuration=0;
@@ -83,14 +85,20 @@ bool bleApplyConfig(JsonDocument& config,const String& source){
     if(!until||until<=utcNow())continue; // A cached session cannot run past its known checkout/cap deadline.
     strlcpy(next[count].address,address.c_str(),sizeof(next[count].address));next[count].grace=grace;next[count++].trackingUntil=until;
   }
-  // A USB test target is deliberately separate from employee assignment on the platform.
-  xSemaphoreTake(bleLock,portMAX_DELAY);String testAddress=bleTestAddress;unsigned testGrace=bleTestGrace;
-  bool testActive=testAddress.length()&&bleTestDuration&&millis()-bleTestStarted<bleTestDuration;xSemaphoreGive(bleLock);
+  // USB test targets are deliberately separate from employee assignment on the platform.
+  String testAddresses[BLE_MAX_TAGS];unsigned testCount=0;
+  xSemaphoreTake(bleLock,portMAX_DELAY);unsigned testGrace=bleTestGrace;
+  bool testActive=bleTestCount&&bleTestDuration&&millis()-bleTestStarted<bleTestDuration;
+  if(testActive){testCount=bleTestCount;for(unsigned i=0;i<testCount;i++)testAddresses[i]=bleTestAddresses[i];}
+  xSemaphoreGive(bleLock);
   if(testActive){
+    for(unsigned testIndex=0;testIndex<testCount;testIndex++){
+    const String& testAddress=testAddresses[testIndex];
     bool duplicate=false;for(unsigned i=0;i<count;i++)if(testAddress==next[i].address)duplicate=true;
     if(!duplicate){
       if(count>=BLE_MAX_TAGS)overCapacity=true;
       else{strlcpy(next[count].address,testAddress.c_str(),sizeof(next[count].address));next[count].grace=testGrace;next[count++].localTest=true;}
+    }
     }
   }
   xSemaphoreTake(bleLock,portMAX_DELAY);
@@ -107,7 +115,7 @@ void bleLoadConfig(){
   if(saved.length()&&!deserializeJson(cache,saved)&&cache["device_id"].as<String>()==DEVICE_ID){
     JsonDocument config;config.set(cache["config"]);if(bleApplyConfig(config,"cached"))return;
   }
-  JsonDocument empty;empty["protocol"]="attendance-ble-v1";empty["tags"].to<JsonArray>();bleApplyConfig(empty,bleTestAddress.length()?"usb_test":"none");
+  JsonDocument empty;empty["protocol"]="attendance-ble-v1";empty["tags"].to<JsonArray>();bleApplyConfig(empty,bleTestCount?"usb_test":"none");
 }
 bool bleSaveObservation(unsigned index,const char* state){
   time_t captured=utcNow();if(!captured)return false;
@@ -281,14 +289,25 @@ bool bleHandleCommand(JsonDocument& request,JsonDocument& response){
   if(request["command"]!="ble_test_config")return false;
   response["command"]="ble_test_config";response["ok"]=false;
   if(request["device_id"].as<String>()!=DEVICE_ID){response["error"]="wrong_reader";return true;}
-  bool enabled=request["enabled"]|true;String address=request["address"]|"";address.toUpperCase();unsigned grace=request["grace_seconds"]|90;
-  if(enabled&&(!bleValidAddress(address)||grace<5||grace>1800)){response["error"]="invalid_test_target";return true;}
+  bool enabled=request["enabled"]|true;unsigned grace=request["grace_seconds"]|90;
+  String addresses[BLE_MAX_TAGS];unsigned count=0;
+  if(enabled){
+    if(request["addresses"].is<JsonArray>()){
+      for(JsonVariant value:request["addresses"].as<JsonArray>()){
+        String address=value.as<String>();address.toUpperCase();
+        if(count>=BLE_MAX_TAGS||!bleValidAddress(address)){response["error"]="invalid_test_targets";return true;}
+        for(unsigned i=0;i<count;i++)if(addresses[i]==address){response["error"]="duplicate_test_target";return true;}
+        addresses[count++]=address;
+      }
+    }else{String address=request["address"]|"";address.toUpperCase();if(bleValidAddress(address))addresses[count++]=address;}
+    if(!count||grace<5||grace>1800){response["error"]="invalid_test_target";return true;}
+  }
   unsigned duration=request["duration_seconds"]|1800;
   if(enabled&&(duration<30||duration>1800)){response["error"]="invalid_test_duration";return true;}
   // Explicit physical diagnostics expire within thirty minutes and never survive a restart.
-  xSemaphoreTake(bleLock,portMAX_DELAY);bleTestAddress=enabled?address:"";bleTestGrace=grace;
+  xSemaphoreTake(bleLock,portMAX_DELAY);bleTestCount=count;for(unsigned i=0;i<BLE_MAX_TAGS;i++)bleTestAddresses[i]=i<count?addresses[i]:"";bleTestGrace=grace;
   bleTestStarted=millis();bleTestDuration=enabled?duration*1000UL:0;xSemaphoreGive(bleLock);bleLoadConfig();
-  response["ok"]=true;response["experimental"]=true;response["enabled"]=enabled;response["expires_in_seconds"]=enabled?duration:0;return true;
+  response["ok"]=true;response["experimental"]=true;response["enabled"]=enabled;response["target_count"]=count;response["expires_in_seconds"]=enabled?duration:0;return true;
 }
 void bleRefreshConfig(){
   String endpoint=bleEndpoint("/api/ble/config");if(!endpoint.length())return;

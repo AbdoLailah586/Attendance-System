@@ -87,6 +87,8 @@ try {
   assert.equal((await call('/api/ble/self?user_id='+user.id,second.token)).status,403);
   pass('Employee self presence is isolated and unassigned users retain GPS mode');
   const initialConfig = await config(); assert.equal(initialConfig.status, 200);
+  assert.equal(initialConfig.body.target_reader_capacity,4);
+  assert.equal((await call('/api/ble/admin',admin)).body.max_concurrent_tags,4);
   // Windows wall time can run ahead of UTC. Use the deployment's clock for
   // synthetic captures, conservatively behind the response by half a second.
   // Keep this offset fixed so adjacent state transitions remain monotonic.
@@ -200,9 +202,13 @@ try {
   boot = randomUUID(); result = await send(); assert.equal(result.status, 200); data = await getAdmin(); assert.equal(currentObservation(data).state, 'unknown');
   at = captureNow(); result = await send([event('seen', at)], 'ready', at); assert.equal(result.status, 200);
   data = await getAdmin(); assert.equal(currentObservation(data).state, 'seen'); pass('Reboot cannot reuse observations from the previous receiver boot');
+  const freshHeartbeats=(await pool.query("SELECT id,recorded_at,received_at FROM ble_receiver_heartbeats WHERE device_id=$1 AND recorded_at>NOW()-INTERVAL '90 seconds'",[reader.device_id])).rows;
   await pool.query("UPDATE ble_receiver_heartbeats SET recorded_at=NOW()-INTERVAL '91 seconds',received_at=NOW()-INTERVAL '91 seconds' WHERE device_id=$1 AND recorded_at>NOW()-INTERVAL '90 seconds'", [reader.device_id]);
   data = await getAdmin(); assert.equal(data.devices.find(d => d.id === reader.device_id).receiver_state, 'stale'); assert.equal(currentObservation(data).state, 'unknown');
   pass('Receiver/network heartbeat loss becomes unknown rather than inferred absence');
+  // Restore only this fixture's timestamps: the stale simulation must not erase
+  // the earlier overlapping branch evidence used by the historical report checks.
+  for(const heartbeat of freshHeartbeats)await pool.query('UPDATE ble_receiver_heartbeats SET recorded_at=$2,received_at=$3 WHERE id=$1 AND device_id=$4',[heartbeat.id,heartbeat.recorded_at,heartbeat.received_at,reader.device_id]);
   await pool.query("UPDATE attendance_logs SET tracking_deadline=NOW()-INTERVAL '1 second' WHERE user_id=$1 AND source='nfc' AND event_type='clock_in'", [user.id]);
   assert.equal((await config()).body.tags.find(t => t.address === tag.address).enabled, false);
   const expiredPresence=(await call('/api/ble/self',token)).body;
@@ -230,6 +236,12 @@ try {
   assert.ok(expectedSummary.observed_seconds>0);
   assert.ok(daily.ble_branches.reduce((sum,branch)=>sum+branch.observed_seconds,0)>expectedSummary.observed_seconds);
   pass('Original daily report carries BLE union hours and preserves official NFC elapsed time');
+  await pool.query('UPDATE nfc_devices SET is_active=FALSE WHERE id=ANY($1::uuid[])',[devices]);
+  const disabledReport=await call('/api/attendance/report?date='+rule.shift_day+'&userId='+user.id,admin);
+  assert.equal(disabledReport.status,200);
+  verifyBleSummary(disabledReport.body.reports.find(report=>report.user.id===user.id),expectedSummary,'Disabled receiver historical report');
+  await pool.query('UPDATE nfc_devices SET is_active=TRUE WHERE id=ANY($1::uuid[])',[devices]);
+  pass('Disabling a receiver preserves captured historical BLE union hours');
   for(const mode of ['daily','weekly','monthly','custom']) {
     const parameters=new URLSearchParams({mode,date:rule.shift_day,userId:String(user.id)});
     if(mode==='weekly')parameters.set('start',rule.shift_day);

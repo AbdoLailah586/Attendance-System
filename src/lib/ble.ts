@@ -108,7 +108,10 @@ export function combineObservationStates(states: BleObservationState[]): BleObse
 export function combinedObservationReport(tags: BleTag[], events: BleEvent[], heartbeats: BleHeartbeat[],
   windows: { start: number; end: number }[], receivers: BleReceiverDefinition[], userId: number, from: number, to: number): BleSummary {
   const ownTags = tags.filter(t => t.user_id === userId), addresses = new Set(ownTags.map(t => t.address));
-  const eligibleReceivers = receivers.filter(r => r.is_active && r.configured_at !== null);
+  // Current activation controls live monitoring, not captured history. A reader
+  // disabled today must retain yesterday's observations. Its missing subsequent
+  // heartbeats expire naturally into unknown time.
+  const eligibleReceivers = receivers.filter(r => r.configured_at !== null);
   const ids = new Set(eligibleReceivers.map(r => r.id));
   const ownEvents = events.filter(e => ids.has(e.device_id) && addresses.has(e.tag_address));
   const relevantHeartbeats = heartbeats.filter(h => ids.has(h.device_id));
