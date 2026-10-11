@@ -1,0 +1,38 @@
+{
+  "apk": "artifacts/attendance-admin-android-v1.0.0.apk",
+  "applicationId": "com.joestore.attendance.admin",
+  "version": "1.0.0",
+  "versionCode": 1,
+  "releaseBuild": true,
+  "debuggable": false,
+  "signatureVerified": true,
+  "signingCertificateSha256": "145d28d9d9fe6de25b31c9161373b5e90d94f4f990ff5e3bf5bb4f9eca5b6b75",
+  "minAndroid": "8.0 (API 26)",
+  "bytes": 3509892,
+  "sha256": "a02139b984e304c40a5f142c9dca0cf03494b5a71bb21d36c981e36f54f2e011",
+  "androidLint": "passed",
+  "physicalAndroidConnected": false,
+  "physicalNotificationDeliveryVerified": false,
+  "productionChecks": 9,
+  "productionVerification": "artifacts/admin-reports-production-verification.json",
+  "locationPermissions": false,
+  "employeeLoginAllowed": false,
+  "webMobileViewport": {
+    "width": 390,
+    "contentWidth": 385,
+    "employeeCards": 5
+  },
+  "notificationTiming": "Android WorkManager; next-shift scheduling plus periodic recovery; execution time is not exact",
+  "features": [
+    "administrator-only login",
+    "account-wide daily reports",
+    "card arrival/departure and last observed tag kept separate",
+    "per employee shift-end reports with overnight support",
+    "native notification permission and test button",
+    "notification opens selected employee/day",
+    "account-scoped deduplication and logout cancellation",
+    "encrypted session storage",
+    "offline cached daily report",
+    "full production admin screens and CSV save picker"
+  ]
+}

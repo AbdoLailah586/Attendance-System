@@ -44,7 +44,7 @@ function gpsBody(){
 }
 function adminBody(){
   const rows=(adminReport?.reports||[]).filter(r=>!adminEmployee||r.user.id===Number(adminEmployee));
-  return `<section class="card"><h1>إدارة جو ستور</h1><p>كل أدوات الموظفين والفروع والكروت والتاجات والتقارير.</p><button id="admin">فتح لوحة الإدارة الكاملة</button></section>
+  return `<section class="card"><h1>إدارة جو ستور</h1><p>كل أدوات الموظفين والفروع والكروت والتاجات والتقارير.</p><button id="admin">فتح لوحة الإدارة الكاملة</button><p class="message" role="status">${escape(message)}</p></section>
     <section class="card"><h2>إشعارات نهاية شيفت كل موظف</h2><p>${adminAlerts.enabled?(adminAlerts.permission?'التنبيهات مفعّلة':'الإشعارات مقفولة من إعدادات الهاتف'):'التنبيهات غير مفعّلة'}</p>
     <p>التقرير التالي: ${escape(timeLabel(adminAlerts.nextDue||null))}</p><p>آخر مزامنة للتنبيهات: ${escape(timeLabel(adminAlerts.lastSync||null))}</p>
     ${Capacitor.getPlatform()==='android'?`<button id="alerts">${adminAlerts.enabled?'إيقاف التنبيهات':'تفعيل إشعارات نهاية الشيفت'}</button><button id="test-alert" class="secondary">تجربة إشعار على هذا الهاتف</button>`:'<p>تنبيهات هذه النسخة متاحة على Android.</p>'}
@@ -107,6 +107,7 @@ async function refresh(){
     presenceOnline=false;draw();if(state.user)await Tracking.sync();
     if(state.user){try{
       const {token}=await Tracking.session();const identity=await request('/api/auth/me',null,token);if(epoch!==sessionEpoch)return;
+      if(state.adminOnly&&identity.user.role!=='admin'){const owner=state.user.id;for(const key of Object.keys(localStorage))if(key.startsWith('admin-report-')&&key.endsWith('-'+owner))localStorage.removeItem(key);await Tracking.logout();state=await Tracking.status();adminReport=null;adminAlerts={};message='هذا التطبيق مخصص لحساب مدير نشط';draw();return;}
       if(['username','name','phone','role','shift_start','shift_end','is_active'].some(key=>state.user[key]!==identity.user[key])){await Tracking.configure({token,user:JSON.stringify(identity.user)});state=await Tracking.status();}
       if(state.user.role==='employee'){
         const schedule=await request('/api/attendance/tracking-window',null,token);if(epoch!==sessionEpoch)return;await Tracking.setSchedule({schedule:JSON.stringify(schedule)});

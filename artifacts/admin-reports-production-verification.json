@@ -1,0 +1,19 @@
+{
+  "origin": "https://attendance-system-joe-2026.vercel.app",
+  "commit": "975f83beba149d6122654379e1a3d350c64b3eef",
+  "run_at": "2026-10-11T14:23:20.422Z",
+  "checks": [
+    "Daily reports and shift notifications require administrator authentication",
+    "Invalid report dates and notification cursors are rejected",
+    "All five real employees have shift schedules, last tag evidence and non-overlapping totals",
+    "Latest completed day and live current business day remain separate",
+    "Employee accounts cannot enter the administrator app or read staff-wide reports",
+    "20:00 and midnight shift reports are scheduled individually using Cairo calendar dates",
+    "Changing an employee shift changes the notification deadline",
+    "Card departure and last tag sighting remain separate; observations outside the session are excluded",
+    "Temporary report fixtures do not add active tags to real ESP32 readers"
+  ],
+  "completed": true,
+  "isolatedFixturesCleaned": true,
+  "activeRealTagsRetained": 5
+}

@@ -1,9 +1,23 @@
 apply plugin: 'com.android.application'
 
+def adminSigning = new Properties()
+def adminSigningPath = System.getenv('JOESTORE_ADMIN_SIGNING_PROPERTIES')
+if (adminSigningPath) { file(adminSigningPath).withInputStream { adminSigning.load(it) } }
+
 android {
     namespace = "com.joestore.attendance"
     compileSdk = rootProject.ext.compileSdkVersion
     buildFeatures { buildConfig true }
+    signingConfigs {
+        if(adminSigningPath) {
+            adminLocal {
+                storeFile file(adminSigning.getProperty('storeFile'))
+                storePassword adminSigning.getProperty('storePassword')
+                keyAlias adminSigning.getProperty('keyAlias')
+                keyPassword adminSigning.getProperty('keyPassword')
+            }
+        }
+    }
     flavorDimensions += "audience"
     productFlavors {
         staff { dimension "audience"; buildConfigField 'boolean', 'ADMIN_ONLY', 'false' }
@@ -13,6 +27,7 @@ android {
             versionCode 1
             versionName '1.0.0'
             buildConfigField 'boolean', 'ADMIN_ONLY', 'true'
+            if(adminSigningPath) { signingConfig signingConfigs.adminLocal }
         }
     }
     defaultConfig {
