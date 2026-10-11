@@ -23,7 +23,7 @@ Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 $taskDialog=New-Object Windows.Forms.Form
 $taskDialog.Text='JoeStore - Reader Wi-Fi setup'
-$taskDialog.Size=New-Object Drawing.Size(580,470)
+$taskDialog.Size=New-Object Drawing.Size(580,510)
 $taskDialog.StartPosition='CenterScreen'
 $taskDialog.FormBorderStyle='FixedDialog'
 $taskDialog.MaximizeBox=$false
@@ -51,16 +51,21 @@ Add-TaskLabel 'Wholesale branch: Wi-Fi name (SSID), 2.4 GHz' 200
 $taskSsid2=Add-TaskInput 225
 Add-TaskLabel 'Wholesale branch: Wi-Fi password' 260
 $taskPassword2=Add-TaskInput 285 $true
-Add-TaskLabel 'Passwords stay on this PC and the ESP32. Connect one reader by USB.' 320
+$taskDualWifi=New-Object Windows.Forms.CheckBox
+$taskDualWifi.Text='Use both Wi-Fi networks on each selected reader (firmware 1.4.4+)'
+$taskDualWifi.Location=New-Object Drawing.Point(20,315);$taskDualWifi.Size=New-Object Drawing.Size(535,30)
+$taskDialog.Controls.Add($taskDualWifi)
+Add-TaskLabel 'Reader branch stays fixed. Passwords stay on this PC and the ESP32.' 350
 $taskSubmit=New-Object Windows.Forms.Button
 $taskSubmit.Text=if($Mode -eq 'Collect'){'Save settings for first upload'}else{'Save and update connected reader'}
-$taskSubmit.Location=New-Object Drawing.Point(20,355);$taskSubmit.Size=New-Object Drawing.Size(350,35)
+$taskSubmit.Location=New-Object Drawing.Point(20,390);$taskSubmit.Size=New-Object Drawing.Size(350,35)
 $taskDialog.Controls.Add($taskSubmit)
 $taskCancel=New-Object Windows.Forms.Button
-$taskCancel.Text='Cancel';$taskCancel.Location=New-Object Drawing.Point(395,355);$taskCancel.Size=New-Object Drawing.Size(150,35)
+$taskCancel.Text='Cancel';$taskCancel.Location=New-Object Drawing.Point(395,390);$taskCancel.Size=New-Object Drawing.Size(150,35)
 $taskCancel.DialogResult='Cancel';$taskDialog.Controls.Add($taskCancel);$taskDialog.CancelButton=$taskCancel
 $taskSubmit.Add_Click({
-  $taskSelected=if($taskBranch.SelectedIndex -eq 0){@($taskSsid1,$taskPassword1)}elseif($taskBranch.SelectedIndex -eq 1){@($taskSsid2,$taskPassword2)}else{@($taskSsid1,$taskPassword1,$taskSsid2,$taskPassword2)}
+  $taskSelected=if($taskDualWifi.Checked -or $taskBranch.SelectedIndex -eq 2){@($taskSsid1,$taskPassword1,$taskSsid2,$taskPassword2)}elseif($taskBranch.SelectedIndex -eq 0){@($taskSsid1,$taskPassword1)}else{@($taskSsid2,$taskPassword2)}
+  if($taskDualWifi.Checked -and $taskSsid1.Text -ceq $taskSsid2.Text){[void][Windows.Forms.MessageBox]::Show('Use two different Wi-Fi names.','Check Wi-Fi settings');return}
   for($taskIndex=0;$taskIndex -lt $taskSelected.Count;$taskIndex+=2){
     $taskSsid=$taskSelected[$taskIndex].Text;$taskPassword=$taskSelected[$taskIndex+1].Text
     $taskSsidBytes=[Text.Encoding]::UTF8.GetByteCount($taskSsid);$taskPasswordBytes=[Text.Encoding]::UTF8.GetByteCount($taskPassword)
@@ -73,8 +78,12 @@ $taskSubmit.Add_Click({
 if($taskDialog.ShowDialog() -ne 'OK'){if($ResultPath){[IO.File]::WriteAllText($ResultPath,'{"status":"cancelled"}')};exit 1}
 $taskBranches=if($taskBranch.SelectedIndex -eq 0){@('branch1')}elseif($taskBranch.SelectedIndex -eq 1){@('branch2')}else{@('branch1','branch2')}
 $taskSettings=@{}
+$taskNetworkSettings=@{
+  branch1=@{ssid=$taskSsid1.Text;password=$taskPassword1.Text}
+  branch2=@{ssid=$taskSsid2.Text;password=$taskPassword2.Text}
+}
 foreach($taskCurrentBranch in $taskBranches){
-  $taskSettings[$taskCurrentBranch]=if($taskCurrentBranch -eq 'branch1'){@{ssid=$taskSsid1.Text;password=$taskPassword1.Text}}else{@{ssid=$taskSsid2.Text;password=$taskPassword2.Text}}
+  $taskSettings[$taskCurrentBranch]=$taskNetworkSettings[$taskCurrentBranch]
   $taskConfigPath=Join-Path $taskPrivateRoot "$taskCurrentBranch.h"
   if(!(Test-Path -LiteralPath $taskConfigPath)){throw "Private config missing for $taskCurrentBranch; no device key was created."}
   $taskConfigText=[IO.File]::ReadAllText($taskConfigPath)
@@ -84,6 +93,14 @@ foreach($taskCurrentBranch in $taskBranches){
     if(![regex]::IsMatch($taskConfigText,$taskPattern)){throw "Config field $($taskPair.name) missing."}
     $taskReplacement='static const char* '+$taskPair.name+' = '+$taskLiteral+';'
     $taskConfigText=[regex]::Replace($taskConfigText,$taskPattern,[Text.RegularExpressions.MatchEvaluator]{param($taskMatch) $taskReplacement})
+  }
+  $taskOtherBranch=if($taskCurrentBranch -eq 'branch1'){'branch2'}else{'branch1'}
+  foreach($taskFallbackPair in @(@{name='WIFI_FALLBACK_SSID';key='ssid'},@{name='WIFI_FALLBACK_PASSWORD';key='password'})){
+    $taskFallbackValue=if($taskDualWifi.Checked){[string]$taskNetworkSettings[$taskOtherBranch][$taskFallbackPair.key]}else{''}
+    $taskFallbackLine='#define '+$taskFallbackPair.name+' '+(ConvertTo-TaskCppString $taskFallbackValue)
+    $taskFallbackPattern='(?m)^#define '+$taskFallbackPair.name+'\s+[^\r\n]*'
+    if([regex]::IsMatch($taskConfigText,$taskFallbackPattern)){$taskConfigText=[regex]::Replace($taskConfigText,$taskFallbackPattern,[Text.RegularExpressions.MatchEvaluator]{param($taskMatch) $taskFallbackLine})}
+    else{$taskConfigText+="`n$taskFallbackLine`n"}
   }
   [IO.File]::WriteAllText($taskConfigPath,$taskConfigText,[Text.UTF8Encoding]::new($false))
 }
@@ -98,7 +115,10 @@ foreach($taskCurrentBranch in $taskBranches){
   $taskConfigText=[IO.File]::ReadAllText((Join-Path $taskPrivateRoot "$taskCurrentBranch.h"))
   $taskDeviceMatch=[regex]::Match($taskConfigText,'static const char\* DEVICE_ID = "([^"]+)";')
   if(!$taskDeviceMatch.Success){throw 'Reader ID missing in private config.'}
-  $taskPayload=$taskSettings[$taskCurrentBranch] | ConvertTo-Json -Compress
+  $taskPayload=if($taskDualWifi.Checked){
+    $taskOtherBranch=if($taskCurrentBranch -eq 'branch1'){'branch2'}else{'branch1'}
+    @{networks=@($taskSettings[$taskCurrentBranch],$taskNetworkSettings[$taskOtherBranch])} | ConvertTo-Json -Depth 5 -Compress
+  }else{$taskSettings[$taskCurrentBranch] | ConvertTo-Json -Compress}
   $taskOldEncoding=$OutputEncoding
   try{
     $OutputEncoding=[Text.UTF8Encoding]::new($false)

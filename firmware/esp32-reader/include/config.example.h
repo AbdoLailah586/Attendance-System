@@ -1,8 +1,11 @@
 #pragma once
 // Copy to attendance-config.h, fill locally, and never commit real credentials.
-// Firmware 1.4.3: USB Wi-Fi settings saved in NVS override these boot defaults.
+// Firmware 1.4.4: USB Wi-Fi settings saved in NVS override these boot defaults.
 static const char* WIFI_SSID = "SHOP_WIFI_2_4_GHZ";
 static const char* WIFI_PASSWORD = "REPLACE_LOCALLY";
+// Optional second network. Network selection never changes this reader's branch identity.
+#define WIFI_FALLBACK_SSID ""
+#define WIFI_FALLBACK_PASSWORD ""
 static const char* DEVICE_ID = "REPLACE_FROM_ADMIN";
 static const char* DEVICE_TOKEN = "REPLACE_FROM_ADMIN";
 static const char* API_URL = "https://attendance-system-joe-2026.vercel.app/api/nfc/events";

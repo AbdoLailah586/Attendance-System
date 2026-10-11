@@ -25,8 +25,18 @@ bool diskReady=false;
 String lastCard;
 unsigned long lastCardSeen=0,ledAt=0;
 bool storageFault=false,ledActive=false;
-constexpr const char* FIRMWARE_VERSION="1.4.3";
-String wifiSsid,wifiPassword,serialCommand;
+constexpr const char* FIRMWARE_VERSION="1.4.4";
+#ifndef WIFI_FALLBACK_SSID
+#define WIFI_FALLBACK_SSID ""
+#endif
+#ifndef WIFI_FALLBACK_PASSWORD
+#define WIFI_FALLBACK_PASSWORD ""
+#endif
+struct WifiProfile {String ssid,password;};
+WifiProfile wifiNetworks[2];
+uint8_t wifiNetworkCount=0,wifiNetworkIndex=0;
+unsigned long wifiAttemptAt=0;
+String serialCommand;
 bool storedWifi=false,serialOverflow=false;
 byte readerVersion=0;
 String eventUuid();
@@ -47,20 +57,62 @@ bool validWifi(const String& ssid,const String& password){
   for(size_t i=0;i<password.length();i++)if(!isxdigit(static_cast<unsigned char>(password[i])))return false;
   return true;
 }
+bool parseWifiProfiles(const JsonDocument& config,WifiProfile* profiles,uint8_t& count){
+  count=0;
+  if(config["networks"].is<JsonArrayConst>()){
+    JsonArrayConst networks=config["networks"].as<JsonArrayConst>();
+    if(networks.size()<1||networks.size()>2)return false;
+    for(JsonObjectConst network:networks){
+      if(!network["ssid"].is<String>()||!network["password"].is<String>())return false;
+      String ssid=network["ssid"].as<String>(),password=network["password"].as<String>();
+      if(!validWifi(ssid,password)||(count&&ssid==profiles[0].ssid))return false;
+      profiles[count++]={ssid,password};
+    }
+  }else{
+    // Keep existing USB tools and single-network NVS settings compatible.
+    if(!config["networks"].isUnbound()||!config["ssid"].is<String>()||!config["password"].is<String>())return false;
+    String ssid=config["ssid"].as<String>(),password=config["password"].as<String>();
+    if(!validWifi(ssid,password))return false;
+    profiles[count++]={ssid,password};
+  }
+  return count>0;
+}
+void startWifiProfile(){
+  if(!wifiNetworkCount)return;
+  wifiAttemptAt=millis();WiFi.disconnect(false,false);
+  WiFi.begin(wifiNetworks[wifiNetworkIndex].ssid.c_str(),wifiNetworks[wifiNetworkIndex].password.c_str());
+}
+void wifiTick(){
+  // One owner on the main loop; no blocking scan and no Wi-Fi changes from the upload worker.
+  if(WiFi.status()!=WL_CONNECTED&&wifiNetworkCount&&millis()-wifiAttemptAt>=15000){
+    wifiNetworkIndex=(wifiNetworkIndex+1)%wifiNetworkCount;startWifiProfile();
+  }
+}
 void loadWifi(){
-  wifiSsid=WIFI_SSID;wifiPassword=WIFI_PASSWORD;
+  if(validWifi(WIFI_SSID,WIFI_PASSWORD))wifiNetworks[wifiNetworkCount++]={WIFI_SSID,WIFI_PASSWORD};
+  if(validWifi(WIFI_FALLBACK_SSID,WIFI_FALLBACK_PASSWORD)&&(!wifiNetworkCount||wifiNetworks[0].ssid!=WIFI_FALLBACK_SSID))
+    wifiNetworks[wifiNetworkCount++]={WIFI_FALLBACK_SSID,WIFI_FALLBACK_PASSWORD};
   Preferences preferences;
   if(!preferences.begin("attendance",false))return;
   String saved=preferences.getString("wifi","");preferences.end();
   JsonDocument config;
-  if(saved.length()&&!deserializeJson(config,saved)&&config["device_id"].as<String>()==DEVICE_ID&&config["ssid"].is<String>()&&config["password"].is<String>()){
-    String ssid=config["ssid"].as<String>(),password=config["password"].as<String>();
-    if(validWifi(ssid,password)){wifiSsid=ssid;wifiPassword=password;storedWifi=true;}
+  if(saved.length()&&!deserializeJson(config,saved)&&config["device_id"].as<String>()==DEVICE_ID){
+    WifiProfile savedProfiles[2];uint8_t count;
+    if(parseWifiProfiles(config,savedProfiles,count)){
+      if(config["networks"].is<JsonArrayConst>()){
+        wifiNetworkCount=count;for(uint8_t i=0;i<count;i++)wifiNetworks[i]=savedProfiles[i];
+      }else{
+        wifiNetworks[0]=savedProfiles[0];if(!wifiNetworkCount)wifiNetworkCount=1;
+        if(wifiNetworkCount==2&&wifiNetworks[1].ssid==wifiNetworks[0].ssid)wifiNetworkCount=1;
+      }
+      storedWifi=true;
+    }
   }
 }
 void printStatus(){
   JsonDocument status;status["command"]="status";status["firmware"]=FIRMWARE_VERSION;status["device_id"]=DEVICE_ID;
   status["wifi_connected"]=WiFi.status()==WL_CONNECTED;status["wifi_source"]=storedWifi?"stored":"compiled";
+  status["wifi_network_count"]=wifiNetworkCount;status["wifi_profile_index"]=wifiNetworkIndex;
   if(WiFi.status()==WL_CONNECTED)status["rssi_dbm"]=WiFi.RSSI();
   status["clock_ready"]=time(nullptr)>1700000000;status["storage_ready"]=diskReady;status["storage_fault"]=storageFault;
   status["rc522_version"]=readerVersion;status["rc522_detected"]=readerVersion!=0&&readerVersion!=0xFF;
@@ -88,17 +140,19 @@ void handleSerialCommand(const String& command){
   if(parsed&&bleHandleCommand(request,response)){emitSerialJson(response);return;}
   if(!parsed||request["command"]!="wifi_config"){response["error"]="invalid_command";}
   else if(request["device_id"].as<String>()!=DEVICE_ID){response["error"]="wrong_reader";}
-  else if(!request["ssid"].is<String>()||!request["password"].is<String>()){response["error"]="invalid_wifi";}
   else{
-    String ssid=request["ssid"].as<String>(),password=request["password"].as<String>();
-    if(!validWifi(ssid,password))response["error"]="invalid_wifi";
+    WifiProfile profiles[2];uint8_t count;
+    if(!parseWifiProfiles(request,profiles,count))response["error"]="invalid_wifi";
     else{
-      JsonDocument config;config["device_id"]=DEVICE_ID;config["ssid"]=ssid;config["password"]=password;String saved;serializeJson(config,saved);
+      JsonDocument config;config["device_id"]=DEVICE_ID;JsonArray networks=config["networks"].to<JsonArray>();
+      for(uint8_t i=0;i<count;i++){JsonObject network=networks.add<JsonObject>();network["ssid"]=profiles[i].ssid;network["password"]=profiles[i].password;}
+      String saved;serializeJson(config,saved);
       Preferences preferences;bool persisted=false;
       if(preferences.begin("attendance",false)){persisted=preferences.putString("wifi",saved)>0;preferences.end();}
       if(!persisted)response["error"]="storage_failed";
       else{
-        wifiSsid=ssid;wifiPassword=password;storedWifi=true;WiFi.disconnect(false,false);WiFi.begin(wifiSsid.c_str(),wifiPassword.c_str());
+        wifiNetworkCount=count;for(uint8_t i=0;i<count;i++)wifiNetworks[i]=profiles[i];
+        wifiNetworkIndex=0;storedWifi=true;startWifiProfile();
         response["ok"]=true;lastTapId="";
       }
     }
@@ -114,7 +168,7 @@ void readSerialCommands(){
       if(serialOverflow)Serial.println("{\"command\":\"wifi_config\",\"ok\":false,\"error\":\"command_too_long\"}");
       else if(serialCommand.length())handleSerialCommand(serialCommand);
       serialCommand="";serialOverflow=false;
-    }else if(!serialOverflow){if(serialCommand.length()<768)serialCommand+=next;else{serialCommand="";serialOverflow=true;}}
+    }else if(!serialOverflow){if(serialCommand.length()<2048)serialCommand+=next;else{serialCommand="";serialOverflow=true;}}
   }
 }
 
@@ -153,11 +207,9 @@ void readCards(){
   reader.PICC_HaltA();reader.PCD_StopCrypto1();if(!held)saveTap(card);
 }
 void uploadTask(void*){
-  unsigned long reconnectAttempt=millis();
   bool clockAnnounced=false;
   for(;;){
     if(WiFi.status()!=WL_CONNECTED){
-      if(millis()-reconnectAttempt>=15000){WiFi.reconnect();reconnectAttempt=millis();}
       vTaskDelay(pdMS_TO_TICKS(3000));continue;
     }
     time_t current=utcNow();
@@ -210,7 +262,7 @@ void setup(){
   screenMessages=xQueueCreate(30,sizeof(ScreenMessage));
   SPI.begin(18,19,23,21);reader.PCD_Init();readerVersion=reader.PCD_ReadRegister(MFRC522::VersionReg);
   if(readerVersion==0||readerVersion==0xFF)Serial.println("RC522 not detected; check 3.3V and SPI wiring.");
-  loadWifi();WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);WiFi.begin(wifiSsid.c_str(),wifiPassword.c_str());
+  loadWifi();WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(false);startWifiProfile();
   configTime(0,0,"time.google.com","pool.ntp.org");
   bleBegin(); // Allocate BLE before any HTTPS handshake starts.
   xTaskCreatePinnedToCore(uploadTask,"upload",16384,nullptr,1,nullptr,0);
@@ -225,6 +277,7 @@ void loop(){
   if(ledActive&&now-ledAt>=200)ledActive=false; // Safe across millis() rollover during continuous operation.
   digitalWrite(STATUS_LED,storageFault?(now/150)%2:!utcNow()?(now/500)%2:ledActive?HIGH:WiFi.status()!=WL_CONNECTED&&now%2000<50);
   readSerialCommands();
+  wifiTick();
   feedbackTick(millis()); // No sound/light delays that block card scanning or uploads.
   delay(30);
 }

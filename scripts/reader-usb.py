@@ -74,13 +74,22 @@ def main():
             request = {
                 "command": "wifi_config",
                 "device_id": status["device_id"],
-                "ssid": settings["ssid"],
-                "password": settings["password"],
             }
+            if "networks" in settings:
+                networks = settings["networks"]
+                if not isinstance(networks, list) or not 1 <= len(networks) <= 2:
+                    raise RuntimeError("Provide one or two Wi-Fi networks.")
+                if len(networks) > 1:
+                    version = tuple(int(part) for part in status.get("firmware", "0.0.0").split("."))
+                    if version < (1, 4, 4):
+                        raise RuntimeError("Two Wi-Fi networks require firmware 1.4.4 or newer.")
+                request["networks"] = networks
+            else:
+                request.update(ssid=settings["ssid"], password=settings["password"])
             result = reply(port, json.dumps(request, ensure_ascii=False, separators=(",", ":")), "wifi_config")
             if not result.get("ok"):
                 raise RuntimeError("Reader rejected settings: " + str(result.get("error", "unknown")))
-            deadline = time.monotonic() + 25
+            deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
                 time.sleep(1)
                 status = reply(port, "--status", "status")
