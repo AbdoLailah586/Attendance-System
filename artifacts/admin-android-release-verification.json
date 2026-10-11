@@ -8,8 +8,8 @@
   "signatureVerified": true,
   "signingCertificateSha256": "145d28d9d9fe6de25b31c9161373b5e90d94f4f990ff5e3bf5bb4f9eca5b6b75",
   "minAndroid": "8.0 (API 26)",
-  "bytes": 3509892,
-  "sha256": "a02139b984e304c40a5f142c9dca0cf03494b5a71bb21d36c981e36f54f2e011",
+  "bytes": 3510180,
+  "sha256": "ea05be54ae636e702e14e93bd7856b60c82a59246ccf758f0b630862c23098c5",
   "androidLint": "passed",
   "physicalAndroidConnected": false,
   "physicalNotificationDeliveryVerified": false,
@@ -33,6 +33,7 @@
     "account-scoped deduplication and logout cancellation",
     "encrypted session storage",
     "offline cached daily report",
-    "full production admin screens and CSV save picker"
+    "full production admin screens and CSV save picker",
+    "background-fetched report available offline from notification"
   ]
 }

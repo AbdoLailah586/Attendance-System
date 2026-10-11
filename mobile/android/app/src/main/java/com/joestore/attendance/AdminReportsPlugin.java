@@ -9,7 +9,9 @@ public class AdminReportsPlugin extends Plugin {
     @PluginMethod public void status(PluginCall call){
         if(!authorized()){call.reject("حساب المدير مطلوب");return;}
         JSObject result=new JSObject();result.put("enabled",AdminReports.enabled(getContext()));result.put("permission",AdminReports.permitted(getContext()));
-        result.put("nextDue",AdminReports.prefs(getContext()).getString("next_due",""));result.put("lastSync",AdminReports.prefs(getContext()).getLong("last_sync",0));result.put("error",AdminReports.prefs(getContext()).getString("error",""));call.resolve(result);
+        result.put("nextDue",AdminReports.prefs(getContext()).getString("next_due",""));result.put("lastSync",AdminReports.prefs(getContext()).getLong("last_sync",0));result.put("error",AdminReports.prefs(getContext()).getString("error",""));
+        if(AdminReports.prefs(getContext()).getInt("owner",0)==TrackingStore.get(getContext()).userId())try{String cached=AdminReports.prefs(getContext()).getString("last_report","");if(!cached.isEmpty())result.put("cachedReport",new org.json.JSONObject(cached));}catch(Exception ignored){}
+        call.resolve(result);
     }
     @PluginMethod public void enable(PluginCall call){
         if(!authorized()){call.reject("حساب المدير مطلوب");return;}

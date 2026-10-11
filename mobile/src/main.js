@@ -64,7 +64,8 @@ async function loadAdmin(token,epoch){
   const owner=state.user.id;
   if(Capacitor.getPlatform()==='android'){try{const target=await AdminReports.launch();if(target.day){adminReportDate=target.day;adminEmployee=String(target.employee||'');}adminAlerts=await AdminReports.status();}catch{}}
   const selected=adminReportDate;
-  adminReport=cached(`admin-report-${selected}`,owner);adminReportOnline=false;
+  const backgroundReport=adminAlerts.cachedReport;
+  adminReport=backgroundReport&&(selected==='current'||selected===backgroundReport.businessDay)?backgroundReport:cached(`admin-report-${selected}`,owner);adminReportOnline=false;
   const data=await request('/api/attendance/day-close'+(selected?'?date='+encodeURIComponent(selected):''),null,token);
   if(epoch!==sessionEpoch||state.user?.id!==owner||selected!==adminReportDate)return;
   adminReport=data;adminReportOnline=true;saveCached(`admin-report-${selected}`,owner,data);
