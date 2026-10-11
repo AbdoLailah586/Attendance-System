@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
       }
       return NextResponse.json({ protocol: 'attendance-ble-v1', mode: 'experimental', heartbeat_seconds: BLE_HEARTBEAT_SECONDS,
         receiver_stale_seconds: BLE_STALE_SECONDS, default_grace_seconds: BLE_DEFAULT_GRACE, tags,
-        capacity_exceeded: tags.filter(t => t.enabled).length > 3, server_time: new Date().toISOString() },
+        capacity_exceeded: tags.filter(t => t.enabled).length > 4, target_reader_capacity: 4, server_time: new Date().toISOString() },
       { headers: { 'Cache-Control': 'private, no-store' } });
     } finally { client.release(); }
   } catch (error) { console.error('BLE config', error); return NextResponse.json({ error: 'Configuration temporarily unavailable' }, { status: 503 }); }

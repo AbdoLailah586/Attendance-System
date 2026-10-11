@@ -25,7 +25,7 @@ bool diskReady=false;
 String lastCard;
 unsigned long lastCardSeen=0,ledAt=0;
 bool storageFault=false,ledActive=false;
-constexpr const char* FIRMWARE_VERSION="1.4.0";
+constexpr const char* FIRMWARE_VERSION="1.4.1";
 String wifiSsid,wifiPassword,serialCommand;
 bool storedWifi=false,serialOverflow=false;
 byte readerVersion=0;

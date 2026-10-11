@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
       ...combinedObservationReport(tagRows.rows,truncated?[]:events.rows,truncated?[]:heartbeats.rows,windows.filter(w=>w.user_id===user.id),devicesRows.rows,user.id,from,to)
     })).filter(report=>report.session_seconds>0);
     return NextResponse.json({ tags, devices, logs: logs.rows, total: count.rows[0].total, page, unknown_tags: unknownTags.rows, reports,combined_reports:combinedReports,
-      from_day: fromDay, to_day: toDay, receiver_stale_seconds: BLE_STALE_SECONDS, experimental: true, max_concurrent_tags: 3,
+      from_day: fromDay, to_day: toDay, receiver_stale_seconds: BLE_STALE_SECONDS, experimental: true, max_concurrent_tags: 4,
       truncated, server_time: new Date(now).toISOString(),
       meaning: 'رصد التاج أثناء فترة الكارت، وليس إثبات وجود الشخص أو غيابه. الفترات غير المرصودة للمراجعة ولا تخصم تلقائيًا.' }, { headers });
   } catch (error) { console.error('BLE admin read', error); return NextResponse.json({ error: 'تعذر تحميل رصد البلوتوث' }, { status: 503 }); }

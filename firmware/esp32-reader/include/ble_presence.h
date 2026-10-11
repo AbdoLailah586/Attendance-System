@@ -3,7 +3,8 @@
 
 // Experimental presence of a carried Bluetooth device, not proof of a person's location.
 // This worker owns all GATT clients; the existing uploader owns all HTTPS requests.
-constexpr unsigned BLE_MAX_TAGS=3,BLE_QUEUE_LIMIT=2000,BLE_RESERVE_BYTES=65536;
+constexpr unsigned BLE_MAX_TAGS=CONFIG_BT_NIMBLE_MAX_CONNECTIONS,BLE_QUEUE_LIMIT=2000,BLE_RESERVE_BYTES=65536;
+static_assert(BLE_MAX_TAGS>=4&&BLE_MAX_TAGS<=9,"BLE connection capacity must match the ESP32 controller");
 constexpr unsigned BLE_REPORT_MS=30000,BLE_CONFIG_MS=60000,BLE_RETRY_MS=5000;
 struct BleTargetConfig {char address[18]{};uint16_t grace=90;bool localTest=false;time_t trackingUntil=0;};
 struct BleTarget {
