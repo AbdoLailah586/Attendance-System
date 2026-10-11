@@ -1,7 +1,7 @@
 {
   "origin": "https://attendance-system-joe-2026.vercel.app",
-  "commit": "f55ca3464361df478e2fe6a611d1f0ebef0d1c97",
-  "run_at": "2026-10-11T11:22:40.339Z",
+  "commit": "770247a3684e069c4729621cd1c5ef179d851ba2",
+  "run_at": "2026-10-11T11:25:55.100Z",
   "completed": true,
   "checks": [
     "BLE management requires administrator access",
@@ -30,6 +30,7 @@
     "Maximum tracking cap disables BLE tracking without manufacturing an NFC checkout",
     "NFC checkout stops interpretation and subsequent diagnostics cannot extend employee hours",
     "Original daily report carries BLE union hours and preserves official NFC elapsed time",
+    "Disabling a receiver preserves captured historical BLE union hours",
     "Daily, weekly, monthly and custom reports share the same BLE union and correctly scoped daily rows",
     "End-of-day report includes NFC-scoped BLE observed, unobserved and unknown durations",
     "Summary and detail CSV exports contain correctly rounded BLE union and branch values",
