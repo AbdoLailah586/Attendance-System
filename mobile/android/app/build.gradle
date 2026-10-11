@@ -3,6 +3,18 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.joestore.attendance"
     compileSdk = rootProject.ext.compileSdkVersion
+    buildFeatures { buildConfig true }
+    flavorDimensions += "audience"
+    productFlavors {
+        staff { dimension "audience"; buildConfigField 'boolean', 'ADMIN_ONLY', 'false' }
+        admin {
+            dimension "audience"
+            applicationIdSuffix '.admin'
+            versionCode 1
+            versionName '1.0.0'
+            buildConfigField 'boolean', 'ADMIN_ONLY', 'true'
+        }
+    }
     defaultConfig {
         applicationId "com.joestore.attendance"
         minSdkVersion rootProject.ext.minSdkVersion

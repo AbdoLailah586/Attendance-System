@@ -60,7 +60,9 @@ final class TrackingStore extends SQLiteOpenHelper {
     }
     synchronized void configure(String token, String user) throws Exception {
         JSONObject identity = new JSONObject(user);
+        if(BuildConfig.ADMIN_ONLY&&!"admin".equals(identity.optString("role")))throw new Exception("هذا التطبيق مخصص لحساب المدير");
         if ((active() || pending() > 0) && identity.getInt("id") != userId()) throw new Exception("زامن الأحداث وأنهِ الشيفت قبل تبديل الحساب");
+        if(identity.getInt("id")!=userId()||!"admin".equals(identity.optString("role")))AdminReports.clear(context);
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, key());
         String encrypted = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP) + ":" + Base64.encodeToString(cipher.doFinal(token.getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
         SharedPreferences.Editor edit=prefs.edit().putString("token", encrypted).putString("user", user).putString("error", "");
@@ -142,6 +144,7 @@ final class TrackingStore extends SQLiteOpenHelper {
     void error(String message) { prefs.edit().putString("error", message).apply(); }
     synchronized void logout() throws Exception {
         if (active() || pending() > 0) throw new Exception("أنهِ الشيفت وزامن الأحداث قبل تسجيل الخروج");
+        AdminReports.clear(context);
         if(!prefs.edit().clear().commit())throw new Exception("تعذر مسح الجلسة المحلية");
         sessionGeneration++;
         android.webkit.CookieManager.getInstance().setCookie(API,"auth_token=; Max-Age=0; Path=/; Secure; HttpOnly");

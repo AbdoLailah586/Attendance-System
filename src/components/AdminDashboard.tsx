@@ -34,7 +34,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({}: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'live' | 'reports' | 'settings' | 'users' | 'logs' | 'nfc' | 'ble'>('live');
+  const [activeTab, setActiveTab] = useState<'live' | 'reports' | 'day-close' | 'settings' | 'users' | 'logs' | 'nfc' | 'ble'>('live');
 
   // Live data
   const [liveData, setLiveData] = useState<LiveEmployee[]>([]);
@@ -285,6 +285,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
       <div className="tab-list">
         <button className={`tab-button ${activeTab === 'nfc' ? 'active' : ''}`} onClick={() => setActiveTab('nfc')}>الكروت وقارئات الفروع</button>
         <button className={`tab-button ${activeTab === 'ble' ? 'active' : ''}`} onClick={() => setActiveTab('ble')}>رصد التاج بالبلوتوث</button>
+        <button className={`tab-button ${activeTab === 'day-close' ? 'active' : ''}`} onClick={() => setActiveTab('day-close')}>التقرير اليومي للموظفين</button>
         <button className={`tab-button ${activeTab === 'logs' ? 'active' : ''}`} onClick={() => setActiveTab('logs')}>كل سجلات الحضور والحركة</button>
         <button
           className={`tab-button ${activeTab === 'live' ? 'active' : ''}`}
@@ -333,6 +334,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
       {activeTab === 'nfc' && <NfcManager users={usersList} />}
       {activeTab === 'ble' && <BleManager users={usersList} />}
       {activeTab === 'logs' && <AttendanceLogViewer />}
+      {activeTab === 'day-close' && <DayCloseReport />}
       {activeTab === 'settings' && <BranchManager onSaved={fetchLiveData} />}
       {activeTab === 'live' && (
         <div>
@@ -444,7 +446,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
         </div>
       )}
 
-      {activeTab === 'reports' && <><div className="card" style={{ padding: 18, marginBottom: 16 }}><h3>تقارير مصادر المتابعة</h3><p className="muted">تقارير الكارت وGPS أدناه تحتفظ بسجلها. فترات رصد التاج تظهر في تقرير البلوتوث، وتُحسب مستقلة عن أوقات GPS.</p><button className="btn btn-secondary" onClick={() => setActiveTab('ble')}>فتح تقرير رصد التاج</button></div><DayCloseReport/><AttendanceReports users={usersList} refreshKey={reportRefresh} /></>}
+      {activeTab === 'reports' && <><div className="card" style={{ padding: 18, marginBottom: 16 }}><h3>تقارير مصادر المتابعة</h3><p className="muted">تقارير الكارت وGPS أدناه تحتفظ بسجلها. فترات رصد التاج تظهر في تقرير البلوتوث، وتُحسب مستقلة عن أوقات GPS.</p><button className="btn btn-secondary" onClick={() => setActiveTab('ble')}>فتح تقرير رصد التاج</button></div><AttendanceReports users={usersList} refreshKey={reportRefresh} /></>}
 
       {/* TAB 3: SETTINGS & GEOFENCING */}
       {activeTab === 'settings' && (

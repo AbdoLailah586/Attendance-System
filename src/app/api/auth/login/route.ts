@@ -5,7 +5,7 @@ import { checkPassword, hashPassword } from '@/lib/password';
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, password } = await req.json();
+    const { username, password, adminOnly } = await req.json();
 
     if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password || username.length > 100 || password.length > 200) {
       return NextResponse.json(
@@ -44,6 +44,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (!user.password.startsWith('scrypt:')) await query('UPDATE users SET password=$1 WHERE id=$2 AND password=$3', [hashPassword(password), user.id, user.password]);
+
+    if(adminOnly===true&&user.role!=='admin')return NextResponse.json({error:'هذا التطبيق مخصص لحساب المدير'},{status:403});
 
     const sessionPayload = {
       id: user.id,
