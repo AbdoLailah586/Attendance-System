@@ -6,8 +6,8 @@ const nextConfig: NextConfig = {
   // dynamically at runtime. Without this, the two PDF routes crash on Vercel with an immediate
   // 500 (module load failure) despite building and working fine locally.
   outputFileTracingIncludes: {
-    '/api/attendance/export': ['./node_modules/@sparticuz/chromium/**/*'],
-    '/api/attendance/daily-pdf': ['./node_modules/@sparticuz/chromium/**/*'],
+    '/api/attendance/export': ['./node_modules/@sparticuz/chromium/**/*', './src/lib/fonts/*.ttf'],
+    '/api/attendance/daily-pdf': ['./node_modules/@sparticuz/chromium/**/*', './src/lib/fonts/*.ttf'],
   },
   async headers() {
     return [
