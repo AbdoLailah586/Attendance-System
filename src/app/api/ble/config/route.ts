@@ -14,6 +14,9 @@ export async function GET(req: NextRequest) {
     const client = await getPool().connect();
     try {
       if (!(await readerFor(client, deviceId!, credential))) return NextResponse.json({ error: 'Device disabled or credential invalid' }, { status: 401 });
+      const discoverySession = (await client.query('SELECT until FROM ble_discovery_sessions WHERE device_id=$1', [deviceId])).rows[0];
+      const discoveryUntil = discoverySession ? new Date(discoverySession.until) : null;
+      const discoveryActive = !!discoveryUntil && +discoveryUntil > Date.now();
       const rows = (await client.query(`SELECT address,grace_seconds,user_id FROM ble_tags t
         JOIN users u ON u.id=t.user_id AND u.is_active=TRUE AND u.role='employee'
         WHERE revoked_at IS NULL ORDER BY t.id`)).rows;
@@ -25,7 +28,8 @@ export async function GET(req: NextRequest) {
       }
       return NextResponse.json({ protocol: 'attendance-ble-v1', mode: 'experimental', heartbeat_seconds: BLE_HEARTBEAT_SECONDS,
         receiver_stale_seconds: BLE_STALE_SECONDS, default_grace_seconds: BLE_DEFAULT_GRACE, tags,
-        capacity_exceeded: tags.filter(t => t.enabled).length > BLE_READER_CAPACITY, target_reader_capacity: BLE_READER_CAPACITY, server_time: new Date().toISOString() },
+        capacity_exceeded: tags.filter(t => t.enabled).length > BLE_READER_CAPACITY, target_reader_capacity: BLE_READER_CAPACITY, server_time: new Date().toISOString(),
+        discovery: discoveryActive ? { enabled: true, until: discoveryUntil!.toISOString() } : { enabled: false } },
       { headers: { 'Cache-Control': 'private, no-store' } });
     } finally { client.release(); }
   } catch (error) { console.error('BLE config', error); return NextResponse.json({ error: 'Configuration temporarily unavailable' }, { status: 503 }); }

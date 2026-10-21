@@ -54,6 +54,14 @@ export async function ensureBleSchema() {
       recorded_at TIMESTAMPTZ NOT NULL, received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), health_started_at TIMESTAMPTZ NOT NULL
     );
     CREATE INDEX IF NOT EXISTS ble_heartbeats_device_time ON ble_receiver_heartbeats(device_id,recorded_at DESC,id DESC);
+    CREATE TABLE IF NOT EXISTS ble_discovery_sessions (
+      device_id UUID PRIMARY KEY REFERENCES nfc_devices(id) ON DELETE CASCADE,
+      started_at TIMESTAMPTZ NOT NULL, until TIMESTAMPTZ NOT NULL, started_by INTEGER NOT NULL REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS ble_discovery_sightings (
+      device_id UUID NOT NULL REFERENCES nfc_devices(id) ON DELETE CASCADE, address VARCHAR(17) NOT NULL,
+      rssi INTEGER CHECK(rssi BETWEEN -127 AND 20), last_seen_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(device_id,address)
+    );
   `).catch(error => { migration = undefined; throw error; });
   return migration;
 }

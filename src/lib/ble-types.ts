@@ -1,4 +1,5 @@
 export const BLE_READER_CAPACITY = 5;
+export const BLE_DISCOVERY_SECONDS = 120;
 export type BleObservationState = 'seen' | 'not_seen' | 'unknown';
 export type BleSessionState = 'waiting' | 'active' | 'closed' | 'expired';
 export interface BleSummary {

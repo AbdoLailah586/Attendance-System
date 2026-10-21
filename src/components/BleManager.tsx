@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { AppUser } from '@/lib/types';
-import { BLE_READER_CAPACITY } from '@/lib/ble-types';
+import { BLE_DISCOVERY_SECONDS, BLE_READER_CAPACITY } from '@/lib/ble-types';
 import { localDate } from '@/lib/time';
 import { bleDuration } from './BlePresenceCard';
 
 type Observation = { device_id: string; branch_name: string; state: 'seen' | 'not_seen' | 'unknown'; in_card_session: boolean; last_observation: string | null; rssi: number | null };
 type Tag = { id: number; address: string; user_id: number; name: string; grace_seconds: number; observations: Observation[] };
 type Device = { id: string; name: string; branch_name: string; receiver_state: 'ready' | 'fault' | 'stale' | 'disabled'; last_heartbeat: string | null };
+type Sighting = { address: string; rssi: number | null; last_seen_at: string };
+type Discovery = { active: boolean; until: string | null; sightings: Sighting[]; secondsLeft: number };
 type Log = { id: string; state: 'seen' | 'not_seen'; tag_address: string; recorded_at: string; received_at: string; user_name: string | null; branch_name: string; status: string; rssi: number | null };
 type Report = { user_id: number; user_name: string; device_id: string; device_name: string; branch_name: string; observed_seconds: number; not_seen_seconds: number; unknown_seconds: number; session_seconds: number };
 type CombinedReport = { user_id: number; user_name: string; observed_seconds: number; not_seen_seconds: number; unknown_seconds: number; session_seconds: number };
@@ -25,6 +27,7 @@ export default function BleManager({ users }: { users: AppUser[] }) {
   const [data, setData] = useState<Data | null>(null), [error, setError] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
   const [fromDay, setFromDay] = useState(localDate), [toDay, setToDay] = useState(localDate), [page, setPage] = useState(1), [reportUser, setReportUser] = useState('all');
   const [address, setAddress] = useState(''), [userId, setUserId] = useState(''), [grace, setGrace] = useState(90);
+  const [discoveryDeviceId, setDiscoveryDeviceId] = useState(''), [discovery, setDiscovery] = useState<Discovery | null>(null), [discoveryBusy, setDiscoveryBusy] = useState(false);
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const params = new URLSearchParams({ from_day: fromDay, to_day: toDay, page: String(page) });
@@ -52,6 +55,42 @@ export default function BleManager({ users }: { users: AppUser[] }) {
     } catch (failure) { setMessage(failure instanceof Error ? failure.message : 'تعذر الحفظ'); return false; }
     finally { setBusy(false); }
   };
+  useEffect(() => {
+    if (!discoveryDeviceId) return;
+    const controller = new AbortController();
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/ble/admin?discovery_device=${discoveryDeviceId}`, { cache: 'no-store', signal: controller.signal });
+        const result = await response.json();
+        if (!controller.signal.aborted && response.ok) {
+          const secondsLeft = result.active ? Math.max(0, Math.round((new Date(result.until).getTime() - new Date(result.server_time).getTime()) / 1000)) : 0;
+          setDiscovery({ active: result.active, until: result.until, sightings: result.sightings, secondsLeft });
+        }
+      } catch { /* transient poll failure; next tick retries */ }
+    };
+    void poll(); const timer = setInterval(() => void poll(), 3000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [discoveryDeviceId]);
+  const startDiscovery = async () => {
+    if (!discoveryDeviceId) return;
+    setDiscoveryBusy(true); setMessage('');
+    try {
+      const response = await fetch('/api/ble/admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'start_discovery', device_id: discoveryDeviceId }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      setDiscovery({ active: true, until: result.until, sightings: [], secondsLeft: BLE_DISCOVERY_SECONDS });
+    } catch (failure) { setMessage(failure instanceof Error ? failure.message : 'تعذر بدء الاكتشاف'); }
+    finally { setDiscoveryBusy(false); }
+  };
+  const stopDiscovery = async () => {
+    if (!discoveryDeviceId) return;
+    setDiscoveryBusy(true);
+    try {
+      const response = await fetch('/api/ble/admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'stop_discovery', device_id: discoveryDeviceId }) });
+      await response.json().catch(() => null);
+      if (response.ok) setDiscovery(current => current ? { ...current, active: false } : current);
+    } finally { setDiscoveryBusy(false); }
+  };
   return <section style={{ display: 'grid', gap: 16 }}>
     <div className="card" style={{ padding: 20 }}>
       <div className="section-title"><h3>رصد التاج بالبلوتوث · تجربة عملية</h3><button className="btn btn-secondary" onClick={() => void load()}>تحديث</button></div>
@@ -62,6 +101,28 @@ export default function BleManager({ users }: { users: AppUser[] }) {
         <strong>{device.name} · {device.branch_name}</strong><p style={{ color: device.receiver_state === 'ready' ? '#15803d' : '#b91c1c' }}>{healthLabels[device.receiver_state]}</p>
         <small>آخر نبضة: {dateTime(device.last_heartbeat)}</small>
       </div>)}</div>
+    </div>
+    <div className="card" style={{ padding: 20 }}>
+      <h3>اكتشاف تاج جديد قبل الربط</h3>
+      <p className="muted">شغّل التاج الجديدة بس وأطفئ باقي التاجات، اختار القارئ القريب منها، وابدأ الاكتشاف. القارئ بياخد شوية (لحد دقيقة تقريبًا) علشان يستلم أمر الاكتشاف من السيرفر، وبعدها بيفضل يدور لمدة {BLE_DISCOVERY_SECONDS} ثانية. لو العنوان مش ظاهر، دوس «ابدأ الاكتشاف» تاني.</p>
+      <div className="metrics-grid">
+        <label>القارئ<select className="form-input" value={discoveryDeviceId} onChange={e => { setDiscoveryDeviceId(e.target.value); setDiscovery(null); }}>
+          <option value="">اختار القارئ</option>
+          {data?.devices.map(device => <option key={device.id} value={device.id}>{device.name} · {device.branch_name}</option>)}
+        </select></label>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button className="btn btn-primary" disabled={!discoveryDeviceId || discoveryBusy} onClick={() => void startDiscovery()}>ابدأ الاكتشاف ({Math.round(BLE_DISCOVERY_SECONDS / 60)} دقيقة)</button>
+        <button className="btn btn-secondary" disabled={!discoveryDeviceId || discoveryBusy || !discovery?.active} onClick={() => void stopDiscovery()}>إيقاف</button>
+      </div>
+      {discovery && <p role="status" style={{ marginTop: 12 }}>
+        {discovery.active ? `جاري البحث... باقي ${discovery.secondsLeft} ثانية` : 'انتهت مهلة الاكتشاف. دوس «ابدأ الاكتشاف» تاني لو محتاج.'}
+      </p>}
+      {discovery?.sightings.length ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+        {discovery.sightings.map(sighting => <button key={sighting.address} type="button" className="btn btn-secondary btn-sm" onClick={() => setAddress(sighting.address)}>
+          <span dir="ltr">{sighting.address}</span>{sighting.rssi !== null && ` · قوة الإشارة ${sighting.rssi}`}
+        </button>)}
+      </div> : discovery?.active ? <p className="muted">مفيش عناوين ظاهرة لسه؛ تأكد إن التاج شغالة وقريبة من القارئ.</p> : null}
     </div>
     <div className="card" style={{ padding: 20 }}>
       <h3>ربط التاج بموظف</h3>

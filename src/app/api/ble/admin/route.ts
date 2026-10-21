@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getActiveSession } from '@/lib/auth';
 import { getPool, query } from '@/lib/db';
-import { BLE_READER_CAPACITY } from '@/lib/ble-types';
+import { BLE_DISCOVERY_SECONDS, BLE_READER_CAPACITY } from '@/lib/ble-types';
 import { addDays } from '@/lib/period-report';
 import { cairoTime, localDate, validDay } from '@/lib/time';
 import { BLE_STALE_SECONDS, bleAddress, combinedObservationReport, ensureBleSchema, observationAt, observationReport, receiverState,
@@ -12,7 +12,18 @@ interface DeviceRow { id: string; name: string; branch_id: string; branch_name: 
 export async function GET(req: NextRequest) {
   try {
     if ((await getActiveSession(req))?.role !== 'admin') return NextResponse.json({ error: 'صلاحيات المدير مطلوبة' }, { status: 403 });
-    const params = req.nextUrl.searchParams, fromDay = params.get('from_day') || localDate(), toDay = params.get('to_day') || fromDay;
+    const params = req.nextUrl.searchParams;
+    const discoveryDevice = params.get('discovery_device');
+    if (discoveryDevice) {
+      await ensureBleSchema();
+      const session = (await query('SELECT until FROM ble_discovery_sessions WHERE device_id=$1', [discoveryDevice])).rows[0];
+      const active = !!session && +new Date(session.until) > Date.now();
+      const sightings = active ? (await query(`SELECT address,rssi,last_seen_at FROM ble_discovery_sightings s
+        WHERE device_id=$1 AND NOT EXISTS(SELECT 1 FROM ble_tags t WHERE t.address=s.address AND t.revoked_at IS NULL)
+        ORDER BY last_seen_at DESC LIMIT 50`, [discoveryDevice])).rows : [];
+      return NextResponse.json({ active, until: active ? session.until : null, sightings, server_time: new Date().toISOString() }, { headers });
+    }
+    const fromDay = params.get('from_day') || localDate(), toDay = params.get('to_day') || fromDay;
     const page = Number(params.get('page') || 1), userId = params.get('user_id');
     if (!validDay(fromDay) || !validDay(toDay) || toDay < fromDay || Date.parse(toDay) - Date.parse(fromDay) > 31 * 86400000
       || !Number.isInteger(page) || page < 1 || page > 100000 || (userId !== null && !/^[1-9]\d*$/.test(userId)))
@@ -87,12 +98,26 @@ export async function POST(req: NextRequest) {
     const admin = await getActiveSession(req);
     if (admin?.role !== 'admin') return NextResponse.json({ error: 'صلاحيات المدير مطلوبة' }, { status: 403 });
     const body = await req.json().catch(() => null);
-    if (!body || !['assign_tag', 'revoke_tag', 'set_grace'].includes(body.action)) return NextResponse.json({ error: 'عملية غير صالحة' }, { status: 400 });
+    if (!body || !['assign_tag', 'revoke_tag', 'set_grace', 'start_discovery', 'stop_discovery'].includes(body.action)) return NextResponse.json({ error: 'عملية غير صالحة' }, { status: 400 });
     await ensureBleSchema();
     const client = await getPool().connect();
     try {
       await client.query('BEGIN');
       await client.query("SELECT pg_advisory_xact_lock(hashtext('attendance-ble-write'))");
+      if (body.action === 'start_discovery' || body.action === 'stop_discovery') {
+        if (typeof body.device_id !== 'string' || !(await client.query('SELECT id FROM nfc_devices WHERE id=$1 AND is_active=TRUE', [body.device_id])).rows.length) {
+          await client.query('ROLLBACK'); return NextResponse.json({ error: 'قارئ غير صالح' }, { status: 400 });
+        }
+        if (body.action === 'start_discovery') {
+          await client.query('DELETE FROM ble_discovery_sightings WHERE device_id=$1', [body.device_id]);
+          const until = new Date(Date.now() + BLE_DISCOVERY_SECONDS * 1000);
+          await client.query(`INSERT INTO ble_discovery_sessions(device_id,started_at,until,started_by) VALUES($1,NOW(),$2,$3)
+            ON CONFLICT(device_id) DO UPDATE SET started_at=NOW(),until=$2,started_by=$3`, [body.device_id, until, admin.id]);
+          await client.query('COMMIT'); return NextResponse.json({ success: true, until: until.toISOString() }, { headers });
+        }
+        await client.query('UPDATE ble_discovery_sessions SET until=NOW() WHERE device_id=$1', [body.device_id]);
+        await client.query('COMMIT'); return NextResponse.json({ success: true }, { headers });
+      }
       if (body.action === 'assign_tag') {
         const address = bleAddress(body.address), grace = body.grace_seconds ?? 90;
         if (!address || !Number.isInteger(body.user_id) || !Number.isInteger(grace) || grace < 60 || grace > 600

@@ -33,6 +33,15 @@ uint16_t bleTestGrace=90;
 unsigned long bleTestStarted=0,bleTestDuration=0;
 bool bleConfigLoaded=false;
 
+// Admin-triggered discovery: briefly report ANY nearby advertised address (not just
+// already-assigned tags) so a brand-new tag can be identified and paired from the web UI.
+constexpr unsigned BLE_DISCOVERY_MAX=20;
+struct BleDiscoverySighting {char address[18]{};int rssi=0;unsigned long seenAt=0;bool used=false;};
+BleDiscoverySighting bleDiscoveries[BLE_DISCOVERY_MAX];
+bool bleDiscoveryActive=false;
+time_t bleDiscoveryUntil=0;
+unsigned long bleDiscoveryUploadAt=0;
+
 bool bleValidAddress(const String& address){
   if(address.length()!=17)return false;
   for(unsigned i=0;i<17;i++)if(i%3==2?address[i]!=':':!isxdigit(static_cast<unsigned char>(address[i])))return false;
@@ -146,6 +155,14 @@ class AttendanceBleScanCallbacks:public NimBLEScanCallbacks {
     for(unsigned i=0;i<bleTargetCount;i++)if(address==bleTargets[i].config.address){
       bleTargets[i].observedAt=millis();bleTargets[i].rssi=device->getRSSI();
       bleTargets[i].addressType=device->getAddress().getType();bleTargets[i].advertised=true;break;
+    }
+    if(bleDiscoveryActive){
+      int rssi=device->getRSSI();int slot=-1;
+      for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(bleDiscoveries[i].used&&address==bleDiscoveries[i].address){slot=i;break;}
+      if(slot<0)for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(!bleDiscoveries[i].used){slot=i;break;}
+      if(slot<0){unsigned long oldest=ULONG_MAX;for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(bleDiscoveries[i].seenAt<oldest){oldest=bleDiscoveries[i].seenAt;slot=i;}}
+      if(slot>=0){strlcpy(bleDiscoveries[slot].address,address.c_str(),sizeof(bleDiscoveries[slot].address));
+        bleDiscoveries[slot].rssi=rssi;bleDiscoveries[slot].seenAt=millis();bleDiscoveries[slot].used=true;}
     }
     xSemaphoreGive(bleLock);
   }
@@ -271,7 +288,10 @@ void bleWriteStatus(JsonDocument& status){
   status["ble_worker_age_ms"]=bleWorkerAt?millis()-bleWorkerAt:0;status["ble_radio_error"]=bleRadioError;
   status["ble_boot_id"]=bleBootId;status["ble_config_over_capacity"]=bleOverCapacity;
   if(bleWorkerHandle)status["ble_worker_free_stack_bytes"]=uxTaskGetStackHighWaterMark(bleWorkerHandle);
-  xSemaphoreTake(bleLock,portMAX_DELAY);status["ble_config_source"]=bleConfigSource;JsonArray tags=status["ble_tags"].to<JsonArray>();
+  xSemaphoreTake(bleLock,portMAX_DELAY);status["ble_config_source"]=bleConfigSource;
+  status["ble_discovery_active"]=bleDiscoveryActive;
+  if(bleDiscoveryActive){unsigned seen=0;for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(bleDiscoveries[i].used)seen++;status["ble_discovery_seen"]=seen;}
+  JsonArray tags=status["ble_tags"].to<JsonArray>();
   for(unsigned i=0;i<bleTargetCount;i++){
     const BleTarget& tag=bleTargets[i];JsonObject entry=tags.add<JsonObject>();
     entry["address"]=tag.config.address;entry["experimental_usb_target"]=tag.config.localTest;entry["connected"]=tag.connected;
@@ -309,13 +329,47 @@ bool bleHandleCommand(JsonDocument& request,JsonDocument& response){
   bleTestStarted=millis();bleTestDuration=enabled?duration*1000UL:0;xSemaphoreGive(bleLock);bleLoadConfig();
   response["ok"]=true;response["experimental"]=true;response["enabled"]=enabled;response["target_count"]=count;response["expires_in_seconds"]=enabled?duration:0;return true;
 }
+// Server-driven discovery window. Independent of tag validity: a malformed tags array
+// must not block turning discovery off, and discovery never survives a restart.
+void bleApplyDiscovery(JsonDocument& config){
+  time_t until=0;
+  if(config["discovery"]["enabled"]|false)until=bleParseUtc(config["discovery"]["until"]|"");
+  xSemaphoreTake(bleLock,portMAX_DELAY);
+  bool wasActive=bleDiscoveryActive;
+  bleDiscoveryUntil=until;bleDiscoveryActive=until&&utcNow()&&utcNow()<until;
+  if(wasActive&&!bleDiscoveryActive)for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)bleDiscoveries[i]=BleDiscoverySighting{};
+  xSemaphoreGive(bleLock);
+}
 void bleRefreshConfig(){
   String endpoint=bleEndpoint("/api/ble/config");if(!endpoint.length())return;
   WiFiClientSecure tls;tls.setCACert(TRUSTED_ROOTS);tls.setHandshakeTimeout(10);
   HTTPClient http;http.setReuse(false);http.setConnectTimeout(8000);http.setTimeout(8000);http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   if(!http.begin(tls,endpoint+"?device_id="+DEVICE_ID))return;
   http.addHeader("Authorization",String("Bearer ")+DEVICE_TOKEN);int code=http.GET();
-  if(code==200){JsonDocument config;if(!deserializeJson(config,http.getString())&&bleApplyConfig(config,"server"))bleCacheConfig(config);}
+  if(code==200){JsonDocument config;if(!deserializeJson(config,http.getString())){
+    if(bleApplyConfig(config,"server"))bleCacheConfig(config);
+    bleApplyDiscovery(config);
+  }}
+  http.end();
+}
+void bleUploadDiscoveries(){
+  BleDiscoverySighting snapshot[BLE_DISCOVERY_MAX];unsigned count=0;
+  xSemaphoreTake(bleLock,portMAX_DELAY);
+  if(bleDiscoveryActive)for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(bleDiscoveries[i].used)snapshot[count++]=bleDiscoveries[i];
+  xSemaphoreGive(bleLock);
+  if(!count)return;
+  String endpoint=bleEndpoint("/api/ble/discovery");if(!endpoint.length())return;
+  JsonDocument request;request["device_id"]=DEVICE_ID;JsonArray sightings=request["sightings"].to<JsonArray>();
+  for(unsigned i=0;i<count;i++){JsonObject sighting=sightings.add<JsonObject>();sighting["address"]=snapshot[i].address;
+    if(snapshot[i].rssi<0&&snapshot[i].rssi>=-127)sighting["rssi"]=snapshot[i].rssi;}
+  WiFiClientSecure tls;tls.setCACert(TRUSTED_ROOTS);tls.setHandshakeTimeout(10);
+  HTTPClient http;http.setReuse(false);http.setConnectTimeout(8000);http.setTimeout(8000);http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  if(!http.begin(tls,endpoint))return;
+  http.addHeader("Content-Type","application/json");http.addHeader("Authorization",String("Bearer ")+DEVICE_TOKEN);
+  String body;serializeJson(request,body);int code=http.POST(body);
+  if(code==200){JsonDocument response;if(!deserializeJson(response,http.getString())&&!(response["active"]|false)){
+    xSemaphoreTake(bleLock,portMAX_DELAY);bleDiscoveryActive=false;for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)bleDiscoveries[i]=BleDiscoverySighting{};xSemaphoreGive(bleLock);
+  }}
   http.end();
 }
 void bleUploadObservations(){
@@ -356,4 +410,6 @@ void bleNetworkCycle(){
   if(!bleNetworkAt||now-bleNetworkAt>=BLE_REPORT_MS||(bleQueued&&now-bleNetworkAt>=5000)){
     bleNetworkAt=now;bleUploadObservations();
   }
+  now=millis();
+  if(bleDiscoveryActive&&(!bleDiscoveryUploadAt||now-bleDiscoveryUploadAt>=3000)){bleDiscoveryUploadAt=now;bleUploadDiscoveries();}
 }

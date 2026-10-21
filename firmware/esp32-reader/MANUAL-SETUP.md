@@ -50,14 +50,14 @@ C:\Users\abdol\AppData\Local\JoeStore\Attendance\ReaderConfigs\branch2.h
 
 ## 4. رفع الكود
 
-وصّل جهازًا واحدًا بكابل بيانات وأغلق Serial Monitor. حدد منفذ CP210x أو CH340 من Device Manager؛ منافذ Bluetooth ليست منفذ ESP32.
+وصّل جهازًا واحدًا بكابل بيانات وأغلق Serial Monitor.
 
 ```powershell
 Set-Location -LiteralPath 'C:\Users\abdol\OneDrive\Desktop\task\atendance_system'
-.\scripts\flash-reader.ps1 -Branch branch2 -Port COM10 -Buzzer active -ArrivalLed green
+.\scripts\flash-reader.ps1 -Branch branch2 -Buzzer active -ArrivalLed green
 ```
 
-استبدل الفرع والمنفذ بالقارئ الفعلي. الأداة تنسخ ملف الفرع الخاص إلى ملف مستثنى من Git وتبني وتفلش. إذا بقيت عند Connecting اضغط BOOT أثناء الاتصال ثم اتركه بعد بدء النقل. يوجد بيئة واحدة esp32dev ولا يوجد اختيار شاشة.
+بدون `-Port` الأداة تكتشف منفذ القارئ تلقائيًا (منفذ USB فعلي واحد فقط متصل)؛ منافذ Bluetooth الوهمية لا تُحتسب. لو متصل أكتر من جهاز USB-serial هتوقف وتطلب منك فصل الباقي أو تحديد `-Port COM10` بنفسك. الأداة تتحقق من المنفذ قبل الرفع (مش مشغول ببرنامج تاني)، وبعد الرفع بترجع تسأل القارئ `--status` للتأكد إنه اشتغل فعليًا وعليه الإصدار الصحيح. استبدل الفرع بالقارئ الفعلي؛ الأداة تنسخ ملف الفرع الخاص إلى ملف مستثنى من Git وتبني وتفلش. إذا بقيت عند Connecting اضغط BOOT أثناء الاتصال ثم اتركه بعد بدء النقل. يوجد بيئة واحدة esp32dev ولا يوجد اختيار شاشة.
 
 ## 5. تشخيص USB
 
