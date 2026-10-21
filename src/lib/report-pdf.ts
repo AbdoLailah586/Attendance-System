@@ -76,6 +76,9 @@ export const PDF_STYLES = `
   .employee-head .username { font-size: 11px; color: ${MUTED}; direction: ltr; unicode-bidi: isolate; }
   .employee-head .range { font-size: 10.5px; color: ${MUTED}; direction: ltr; }
   .employee-body { padding: 14px 16px 16px; }
+  .headline-banner { display: flex; align-items: center; justify-content: space-between; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; margin-bottom: 4px; }
+  .headline-banner span { font-weight: 700; color: #991b1b; font-size: 12.5px; }
+  .headline-banner strong { font-size: 17px; color: #991b1b; }
   .stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 14px; }
   .stat-grid.secondary { grid-template-columns: repeat(2, 1fr); max-width: 50%; margin-right: auto; }
   .stat { border: 1px solid ${BORDER}; border-radius: 8px; padding: 8px 10px; background: #fff; }
@@ -134,7 +137,8 @@ interface PeriodReportDay {
 interface PeriodReportLike {
   user: { name: string; username: string }; start: string | null; end: string | null;
   summary: { total: { formatted: string }; card: { formatted: string }; regular: { formatted: string }; overtime: { formatted: string };
-    outside: { formatted: string }; unknown: { formatted: string }; prayer: { formatted: string } };
+    outside: { formatted: string }; unknown: { formatted: string }; prayer: { formatted: string };
+    absenceTotal: { formatted: string }; absentShiftMinutes: { formatted: string } };
   days: PeriodReportDay[];
 }
 
@@ -148,6 +152,11 @@ function employeeSectionHtml(report: PeriodReportLike): string {
       <span class="range">${ltr((report.start || '') + ' — ' + (report.end || ''))}</span>
     </div>
     <div class="employee-body">
+      <div class="headline-banner">
+        <span>إجمالي الغياب وعدم التواجد الفعلي (الرقم النهائي)</span>
+        <strong>${report.summary.absenceTotal.formatted}</strong>
+      </div>
+      <p class="empty-note">يجمع أيام الغياب الكاملة (${report.summary.absentShiftMinutes.formatted}) وفجوات التتبع أثناء الشيفت (${report.summary.unknown.formatted})، باستثناء وقت الصلاة.</p>
       <div class="stat-grid">
         ${statTile('إجمالي الوقت', report.summary.total.formatted)}
         ${statTile('فترة الكارت', report.summary.card.formatted)}

@@ -58,9 +58,13 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
     return {date,policy,scheduled,finished,status,...data,logCount:current.length,lateMinutes:data.punctuality.status==='late'?Math.max(0,data.punctuality.diffMinutes):0};
   });
   const branchTotals:Record<string,number>={};
-  let regular=0,overtime=0,outside=0,unknown=0,prayer=0,total=0,card=0;
+  let regular=0,overtime=0,outside=0,unknown=0,prayer=0,total=0,card=0,absentShiftMinutes=0;
   for(const d of days){
     const shift=shiftWindow(d.date,d.policy.shift_start,d.policy.shift_end);
+    // A fully-absent day has no logs at all, so it never contributes to the `unknown` gap
+    // total below; its whole scheduled shift counts as non-presence here instead. Prayer-time
+    // exemption only ever applies to a gap inside a tracked shift, so it never reduces this.
+    if(d.status==='absent')absentShiftMinutes+=Math.max(0,(+shift.end-+shift.start)/60000);
     if(d.attendanceSource==='nfc'){card+=d.summary.cardMinutes;total+=d.summary.totalMinutes;regular+=d.summary.regularMinutes;overtime+=d.summary.overtimeMinutes;}
     for(const t of d.timeline){
       if(t.branch_id==='outside')outside+=t.durationMinutes;
@@ -85,6 +89,10 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
     unverifiedDays:days.filter(d=>d.status==='unverified').length,untrackedDays:days.filter(d=>d.status==='untracked').length,
     lateDays:days.filter(d=>d.status==='present'&&d.lateMinutes>0).length,
     card:duration(card),late:duration(days.reduce((s,d)=>s+d.lateMinutes,0)),total:duration(total),regular:duration(regular),overtime:duration(overtime),outside:duration(outside),unknown:duration(unknown),prayer:duration(prayer),
+    // Final combined "hours not accounted for": full shift length on days with zero attendance,
+    // plus in-shift tracking gaps on days the employee did show up — prayer-excused time stays
+    // out of both, matching why that exemption exists in the first place.
+    absenceTotal:duration(absentShiftMinutes+unknown),absentShiftMinutes:duration(absentShiftMinutes),
     earlyDeparture:duration(days.reduce((s,d)=>s+d.summary.earlyDepartureMinutes,0)),exitCount:days.reduce((s,d)=>s+d.exitCount,0),
     branches:allIds.map(id=>({id,name:branchNames[id]||id,...duration(branchTotals[id]||0)})),
   }};
