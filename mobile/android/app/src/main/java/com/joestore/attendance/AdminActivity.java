@@ -16,6 +16,7 @@ public class AdminActivity extends ComponentActivity {
     private WebView web;
     private byte[] exportData;
     private final ActivityResultLauncher<String> saveCsv=registerForActivityResult(new ActivityResultContracts.CreateDocument("text/csv"),target->saveExport(target));
+    private final ActivityResultLauncher<String> savePdf=registerForActivityResult(new ActivityResultContracts.CreateDocument("application/pdf"),target->saveExport(target));
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
         LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
@@ -38,18 +39,22 @@ public class AdminActivity extends ComponentActivity {
     }
     private void saveReport(String url){
         Uri uri=Uri.parse(url);
-        if(!"https".equals(uri.getScheme())||!"attendance-system-joe-2026.vercel.app".equalsIgnoreCase(uri.getHost())||!"/api/attendance/export".equals(uri.getPath()))return;
+        if(!"https".equals(uri.getScheme())||!"attendance-system-joe-2026.vercel.app".equalsIgnoreCase(uri.getHost())
+            ||!("/api/attendance/export".equals(uri.getPath())||"/api/attendance/daily-pdf".equals(uri.getPath())))return;
         new Thread(()->{
             try{
                 TrackingStore store=TrackingStore.get(this);int owner=store.userId();
                 HttpsURLConnection connection=(HttpsURLConnection)new URL(url).openConnection();
                 try{
                     connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(15000);connection.setReadTimeout(30000);connection.setRequestProperty("Authorization","Bearer "+store.token());
-                    if(connection.getResponseCode()!=200||!connection.getContentType().startsWith("text/csv"))throw new IOException();
+                    String type=connection.getContentType();
+                    boolean csv=connection.getResponseCode()==200&&type!=null&&type.startsWith("text/csv");
+                    boolean pdf=connection.getResponseCode()==200&&type!=null&&type.startsWith("application/pdf");
+                    if(!csv&&!pdf)throw new IOException();
                     ByteArrayOutputStream bytes=new ByteArrayOutputStream();
-                    try(InputStream input=connection.getInputStream()){byte[] buffer=new byte[4096];int n;while((n=input.read(buffer))!=-1){if(bytes.size()+n>5*1024*1024)throw new IOException();bytes.write(buffer,0,n);}}
+                    try(InputStream input=connection.getInputStream()){byte[] buffer=new byte[4096];int n;while((n=input.read(buffer))!=-1){if(bytes.size()+n>10*1024*1024)throw new IOException();bytes.write(buffer,0,n);}}
                     if(owner!=store.userId())return;
-                    runOnUiThread(()->{if(isFinishing())return;exportData=bytes.toByteArray();saveCsv.launch("attendance-report.csv");});
+                    runOnUiThread(()->{if(isFinishing())return;exportData=bytes.toByteArray();if(csv)saveCsv.launch("attendance-report.csv");else savePdf.launch("attendance-report.pdf");});
                 }finally{connection.disconnect();}
             }catch(Exception error){runOnUiThread(()->Toast.makeText(this,"تعذر تنزيل التقرير؛ راجع الاتصال والجلسة",Toast.LENGTH_LONG).show());}
         }).start();

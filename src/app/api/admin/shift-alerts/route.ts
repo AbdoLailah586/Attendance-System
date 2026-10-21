@@ -6,6 +6,7 @@ import {ensureBleSchema} from '@/lib/ble';
 import {businessDay,dailyRules} from '@/lib/card-day';
 import {addDays,policyOn,type EmployeePolicy} from '@/lib/period-report';
 import type {AppUser} from '@/lib/types';
+import {cairoTime} from '@/lib/time';
 export async function GET(req:NextRequest){
   if((await getActiveSession(req))?.role!=='admin')return NextResponse.json({error:'صلاحيات المدير مطلوبة'},{status:403});
   try{
@@ -20,17 +21,25 @@ export async function GET(req:NextRequest){
     const jobs=[];
     for(let offset=-7;offset<=1;offset++){
       const day=addDays(current,offset);
+      // One combined, all-employees daily report PDF per business day, ready once that whole
+      // business day is over (3 AM Cairo the day after) — not tied to any single employee's
+      // shift ending, so it is computed once here rather than once per user below.
+      const dailyPdfDue=+cairoTime(addDays(day,1),'03:00');
+      if(dailyPdfDue>=since&&dailyPdfDue<=+now+48*3600000){
+        jobs.push({key:`daily-pdf:${day}`,kind:'daily_pdf',user_id:null,name:null,business_day:day,shift_day:day,
+          shift_start:null,due_at:new Date(dailyPdfDue).toISOString(),ready:dailyPdfDue<=+now,report_url:`/api/attendance/daily-pdf?date=${day}`});
+      }
       for(const user of users.rows){
         const own=policies.rows.filter(p=>p.user_id===user.id),rule=dailyRules(user,own,day,settings);
         const policy=policyOn(user,own,rule.shift_day);
         if(policy.role!=='employee'||!policy.is_active||rule.shift_day<(user.attendance_start_date||'1900-01-01')||!policy.work_days.includes(new Date(rule.shift_day+'T12:00:00Z').getUTCDay()))continue;
         const end=+new Date(rule.shift_end);
         if(end<since||end>+now+48*3600000)continue;
-        jobs.push({key:`${user.id}:${day}`,user_id:user.id,name:user.name,business_day:day,shift_day:rule.shift_day,
+        jobs.push({key:`${user.id}:${day}`,kind:'shift_report',user_id:user.id,name:user.name,business_day:day,shift_day:rule.shift_day,
           shift_start:new Date(rule.shift_start).toISOString(),due_at:new Date(end).toISOString(),ready:end<=+now,report_url:`/api/attendance/day-close?date=${day}`});
       }
     }
-    jobs.sort((a,b)=>a.due_at.localeCompare(b.due_at)||a.user_id-b.user_id);
+    jobs.sort((a,b)=>a.due_at.localeCompare(b.due_at)||(a.user_id??0)-(b.user_id??0));
     return NextResponse.json({server_time:now.toISOString(),timezone:'Africa/Cairo',next_due_at:jobs.find(j=>!j.ready)?.due_at||null,jobs},{headers:{'Cache-Control':'private, no-store'}});
   }catch(error){console.error('Shift alerts',error);return NextResponse.json({error:'تعذر تحميل مواعيد تقارير الشيفت'},{status:503});}
 }

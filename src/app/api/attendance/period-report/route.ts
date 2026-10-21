@@ -8,6 +8,7 @@ import type { AppUser } from '@/lib/types';
 import type { AttendanceLog } from '@/lib/attendance';
 import { loadBleRangeSummaries } from '@/lib/ble';
 import { bleReportFields } from '@/lib/ble-report';
+import { prayerWindowsFor } from '@/lib/prayer-times';
 
 export async function GET(req:NextRequest){
   try{
@@ -32,7 +33,9 @@ export async function GET(req:NextRequest){
       const result=await query<AttendanceLog>(`(SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp<$2 ORDER BY timestamp DESC,id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp<$2 AND event_type IN ('clock_in','clock_out') ORDER BY timestamp DESC,id DESC LIMIT 1)
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp >=$2 AND timestamp<$3) ORDER BY timestamp,id`,[user.id,from.toISOString(),to.toISOString()]);
-      const report=buildPeriodReport(user,history,result.rows,settings,range.start,range.end);
+      const days=rangeDays(range.start,range.end);
+      const prayerWindowsByDay=Object.fromEntries(await Promise.all(days.map(async date=>[date,await prayerWindowsFor(date)] as const)));
+      const report=buildPeriodReport(user,history,result.rows,settings,range.start,range.end,new Date(),prayerWindowsByDay);
       // A late arrival on the final shift day can run for the configured 36-hour cap.
       const bleEnd=+cairoTime(addDays(range.end,1))+36*3600000;
       const ble=(await loadBleRangeSummaries([user.id],+from,bleEnd,report.days.map(day=>day.date))).get(user.id);

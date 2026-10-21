@@ -9,10 +9,12 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^153.0.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.50.0",
     "next": "16.3.8",
     "pg": "^8.23.1",
+    "puppeteer-core": "^25.15.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
@@ -25,6 +27,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
+    "puppeteer": "^25.15.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

@@ -48,6 +48,21 @@ final class AdminReports {
         }finally{connection.disconnect();}
     }
     private static String duration(int seconds){return (seconds/3600)+" س "+(seconds%3600/60)+" د";}
+    // DownloadManager runs the write in the system's own process, so it needs no
+    // Activity and no storage permission (even pre-scoped-storage, its public-dir
+    // writes have always been exempt) — the only option that works from a headless
+    // WorkManager job with no UI to launch a save-location picker.
+    static void downloadDailyPdf(Context c,String day,String token){
+        android.app.DownloadManager manager=(android.app.DownloadManager)c.getSystemService(Context.DOWNLOAD_SERVICE);
+        android.net.Uri uri=android.net.Uri.parse(TrackingStore.API+"/api/attendance/daily-pdf?date="+day);
+        String filename="daily-report-"+day+".pdf";
+        android.app.DownloadManager.Request request=new android.app.DownloadManager.Request(uri)
+            .addRequestHeader("Authorization","Bearer "+token)
+            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_HIDDEN)
+            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS,filename)
+            .setMimeType("application/pdf").setAllowedOverMetered(true).setAllowedOverRoaming(true);
+        manager.enqueue(request);
+    }
     static void notify(Context c,int id,String title,String body,String day,int employee,int owner){
         if(Build.VERSION.SDK_INT>=33&&androidx.core.content.ContextCompat.checkSelfPermission(c,android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)throw new SecurityException("Notifications permission required");
         channel(c);Intent target=new Intent(c,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -65,6 +80,18 @@ final class AdminReports {
         for(int i=0;i<jobs.length();i++){
             JSONObject job=jobs.getJSONObject(i);if(!job.getBoolean("ready"))continue;String key=job.getString("key"),day=job.getString("business_day");
             if(p.getStringSet("delivered",Collections.emptySet()).contains(key))continue;
+            if("daily_pdf".equals(job.optString("kind","shift_report"))){
+                synchronized(AdminReports.class){
+                    if(!enabled(c)||owner!=store.userId()||!token.equals(store.token()))return;
+                    Set<String> delivered=new HashSet<>(p.getStringSet("delivered",Collections.emptySet()));if(delivered.contains(key))continue;
+                    downloadDailyPdf(c,day,token);
+                    notify(c,key.hashCode(),"تم حفظ التقرير اليومي","تقرير "+day+" لكل الموظفين (الحضور والانصراف والساعات والفجوات) تم حفظه في Downloads.",day,0,owner);
+                    delivered.add(key);
+                    if(delivered.size()>500)delivered.removeIf(k->k.substring(k.indexOf(':')+1).compareTo(day)<0);
+                    p.edit().putStringSet("delivered",delivered).apply();
+                }
+                continue;
+            }
             JSONObject report=reports.get(day);if(report==null){report=get("/api/attendance/day-close?date="+day,token);reports.put(day,report);}
             JSONArray rows=report.getJSONArray("reports");JSONObject row=null;for(int j=0;j<rows.length();j++){JSONObject candidate=rows.getJSONObject(j);if(candidate.getJSONObject("user").getInt("id")==job.getInt("user_id")){row=candidate;break;}}
             if(row==null)continue;JSONObject summary=row.optJSONObject("ble_summary");String body=summary==null?"افتح التقرير لعرض أوقات الكارت والرصد":

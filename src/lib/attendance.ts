@@ -13,17 +13,17 @@ export interface AttendanceReport {
   attendanceSource:string;missingCheckout:boolean;missingArrival:boolean;provisionalMinutes:number;
   hasLogs:boolean;logCount:number;firstArrival:string|null;lastDeparture:string|null;onDuty:boolean;exitCount:number;
   punctuality:ReturnType<typeof evaluatePunctuality>;
-  summary:{cardMinutes:number;cardFormatted:string;totalMinutes:number;totalFormatted:string;branch1Minutes:number;branch1Formatted:string;branch2Minutes:number;branch2Formatted:string;outsideMinutes:number;outsideFormatted:string;unknownMinutes:number;unknownFormatted:string;regularMinutes:number;regularFormatted:string;overtimeMinutes:number;overtimeFormatted:string;earlyDepartureMinutes:number;earlyDepartureFormatted:string;branches:{id:string;name:string;minutes:number;formatted:string}[]};
+  summary:{cardMinutes:number;cardFormatted:string;totalMinutes:number;totalFormatted:string;branch1Minutes:number;branch1Formatted:string;branch2Minutes:number;branch2Formatted:string;outsideMinutes:number;outsideFormatted:string;unknownMinutes:number;unknownFormatted:string;prayerMinutes:number;prayerFormatted:string;regularMinutes:number;regularFormatted:string;overtimeMinutes:number;overtimeFormatted:string;earlyDepartureMinutes:number;earlyDepartureFormatted:string;branches:{id:string;name:string;minutes:number;formatted:string}[]};
   timeline:{branch_id:string;branch_name:string;start:string;end:string;durationMinutes:number;durationFormatted:string}[];
 }
 
 export function buildReport(
   user: { shift_start?: string; shift_end?: string }, logs: AttendanceLog[], settings: StoreSettings,
-  day: string, rangeStart: Date, rangeEnd: Date, now = new Date(),
+  day: string, rangeStart: Date, rangeEnd: Date, now = new Date(), prayerWindows: { start: number; end: number }[] = [],
 ):AttendanceReport {
   const shift = shiftWindow(day, user.shift_start || settings.shift_start_time, user.shift_end || settings.shift_end_time);
   const usesCard=settings.attendance_mode==='nfc'&&(!settings.nfc_enabled_at||day>=localDate(new Date(settings.nfc_enabled_at)));
-  if(usesCard||logs.some(l=>l.source==='nfc'&&shiftDay(l)===day))return cardReport(user,logs,settings,day,shift,now);
+  if(usesCard||logs.some(l=>l.source==='nfc'&&shiftDay(l)===day))return cardReport(user,logs,settings,day,shift,now,prayerWindows);
   const cutoff = Math.min(now.getTime(), rangeEnd.getTime());
   const gapLimit = Math.max(180, settings.ping_interval_secs * 3) * 1000;
   const totals: Record<string, number> = { branch1: 0, branch2: 0, outside: 0, unknown: 0 };
@@ -38,7 +38,7 @@ export function buildReport(
     outside: 'خارج الفروع', unknown: 'فجوة تتبع / موقع غير دقيق',
     ...Object.fromEntries((settings.branches || []).map(b => [b.id, b.name])),
   };
-  const inside = (branch: string) => branch !== 'outside' && branch !== 'unknown';
+  const inside = (branch: string) => branch !== 'outside' && branch !== 'unknown' && branch !== 'prayer';
   const add = (branch: string, start: number, end: number) => {
     start = Math.max(start, rangeStart.getTime()); end = Math.min(end, cutoff);
     if (end <= start) return;
@@ -81,6 +81,38 @@ export function buildReport(
     // Missing samples are visible and never paid as confirmed presence.
     add('unknown', evidenceEnd, end);
   }
+  // Excuse only the slice of an "unknown" gap that actually overlaps a prayer window, splitting
+  // the segment so any time beyond the window stays a normal, review-worthy gap. The excused
+  // slice is relabeled, never deleted, so a pattern of maxing this out every prayer every day
+  // is still visible to an admin reviewing the timeline.
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const segment = timeline[i];
+    if (segment.branch_id !== 'unknown' || !prayerWindows.length) continue;
+    const segStart = Date.parse(segment.start), segEnd = Date.parse(segment.end);
+    let pieces: { start: number; end: number; prayer: boolean }[] = [{ start: segStart, end: segEnd, prayer: false }];
+    for (const window of prayerWindows) {
+      const next: typeof pieces = [];
+      for (const piece of pieces) {
+        if (piece.prayer) { next.push(piece); continue; }
+        const overlapStart = Math.max(piece.start, window.start), overlapEnd = Math.min(piece.end, window.end);
+        if (overlapEnd <= overlapStart) { next.push(piece); continue; }
+        if (overlapStart > piece.start) next.push({ start: piece.start, end: overlapStart, prayer: false });
+        next.push({ start: overlapStart, end: overlapEnd, prayer: true });
+        if (overlapEnd < piece.end) next.push({ start: overlapEnd, end: piece.end, prayer: false });
+      }
+      pieces = next;
+    }
+    if (pieces.length === 1 && !pieces[0].prayer) continue;
+    const replacement = pieces.filter(p => p.end > p.start).map(p => {
+      const minutes = (p.end - p.start) / 60000;
+      return { branch_id: p.prayer ? 'prayer' : 'unknown', branch_name: p.prayer ? 'غياب أثناء وقت الصلاة (مستثنى)' : names.unknown,
+        start: new Date(p.start).toISOString(), end: new Date(p.end).toISOString(), durationMinutes: minutes, durationFormatted: formatDurationArabic(minutes) };
+    });
+    timeline.splice(i, 1, ...replacement);
+    const prayerMinutes = pieces.filter(p => p.prayer).reduce((sum, p) => sum + (p.end - p.start) / 60000, 0);
+    totals.unknown -= prayerMinutes;
+    totals.prayer = (totals.prayer || 0) + prayerMinutes;
+  }
   const total = Object.entries(totals).filter(([key]) => inside(key)).reduce((sum, [,value]) => sum + value, 0);
   const minutes = (value: number) => Math.round(value);
   const earlyDeparture = !onDuty && lastDeparture ? Math.max(0, (shift.end.getTime() - Date.parse(lastDeparture)) / 60000) : 0;
@@ -95,6 +127,7 @@ export function buildReport(
       branch2Minutes: minutes(totals.branch2), branch2Formatted: formatDurationArabic(totals.branch2),
       outsideMinutes: minutes(totals.outside), outsideFormatted: formatDurationArabic(totals.outside),
       unknownMinutes: minutes(totals.unknown), unknownFormatted: formatDurationArabic(totals.unknown),
+      prayerMinutes: minutes(totals.prayer || 0), prayerFormatted: formatDurationArabic(totals.prayer || 0),
       regularMinutes: minutes(regular), regularFormatted: formatDurationArabic(regular),
       overtimeMinutes: minutes(overtime), overtimeFormatted: formatDurationArabic(overtime),
       earlyDepartureMinutes: minutes(earlyDeparture), earlyDepartureFormatted: formatDurationArabic(earlyDeparture),
@@ -104,7 +137,7 @@ export function buildReport(
 }
 
 // Card attendance and sampled GPS evidence are deliberately calculated separately.
-function cardReport(user:{shift_start?:string;shift_end?:string},logs:AttendanceLog[],settings:StoreSettings,day:string,shift:{start:Date;end:Date},now:Date):AttendanceReport{
+function cardReport(user:{shift_start?:string;shift_end?:string},logs:AttendanceLog[],settings:StoreSettings,day:string,shift:{start:Date;end:Date},now:Date,prayerWindows:{start:number;end:number}[]=[]):AttendanceReport{
   const cards=logs.filter(l=>l.source==='nfc'&&shiftDay(l)===day&&new Date(l.timestamp)<=now).sort((a,b)=>+new Date(a.timestamp)-+new Date(b.timestamp)||a.id-b.id);
   const arrival=cards.find(l=>l.event_type==='clock_in'),departure=cards.find(l=>l.event_type==='clock_out');
   const firstArrival=arrival?new Date(arrival.timestamp).toISOString():null,lastDeparture=departure?new Date(departure.timestamp).toISOString():null;
@@ -114,7 +147,7 @@ function cardReport(user:{shift_start?:string;shift_end?:string},logs:Attendance
   const from=start,to=Math.max(from,Math.min(end,deadline,+now));
   const gps=logs.filter(l=>l.event_type==='ping'&&l.source!=='nfc'&&+new Date(l.timestamp)>=from&&+new Date(l.timestamp)<to);
   const controls:AttendanceLog[]=arrival?[{id:-2,timestamp:new Date(from),branch_id:'unknown',event_type:'clock_in',client_event_id:'gps-evidence'},...gps,{id:Number.MAX_SAFE_INTEGER,timestamp:new Date(to),branch_id:'unknown',event_type:'clock_out',client_event_id:'gps-evidence'}]:[];
-  const evidence=buildReport(user,controls,{...settings,attendance_mode:'gps'},day,new Date(from),new Date(to),now);
+  const evidence=buildReport(user,controls,{...settings,attendance_mode:'gps'},day,new Date(from),new Date(to),now,prayerWindows);
   const validPair=Boolean(arrival&&departure&&end>=start);
   const total=validPair?(end-start)/60000:0;
 

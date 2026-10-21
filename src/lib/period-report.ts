@@ -40,7 +40,7 @@ export function dayWindow(day:string, policy:Pick<EmployeePolicy,'shift_start'|'
   const overnight=policy.shift_end<=policy.shift_start;
   return {start:overnight?cairoTime(day,policy.shift_start):cairoTime(day),end:overnight?cairoTime(nextDay(day),policy.shift_start):cairoTime(nextDay(day))};
 }
-export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:AttendanceLog[], settings:StoreSettings, start:string,end:string,now=new Date()) {
+export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:AttendanceLog[], settings:StoreSettings, start:string,end:string,now=new Date(),prayerWindowsByDay:Record<string,{start:number;end:number}[]>={}) {
   const resetDay=settings.attendance_reset_at?localDate(new Date(settings.attendance_reset_at)):null;
   const begins=[user.attendance_start_date||'1900-01-01',resetDay||'1900-01-01'].sort().at(-1)!;
   const sorted=[...logs].sort((a,b)=>new Date(a.timestamp).getTime()-new Date(b.timestamp).getTime()||a.id-b.id);
@@ -50,7 +50,7 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
     const current=sorted.filter(l=>l.shift_day?(typeof l.shift_day==='string'?l.shift_day.slice(0,10):l.shift_day?localDate(new Date(l.shift_day)):null)===date:new Date(l.timestamp)>=window.start&&new Date(l.timestamp)<window.end);
     const carried=[last,control].filter((l):l is AttendanceLog=>Boolean(l));
     const extra=sorted.filter(l=>l.event_type==='ping'&&!l.shift_day);
-    const data=buildReport(policy,[...new Map([...carried,...current,...extra].map(l=>[l.id,l])).values()],{...settings,grace_period_mins:policy.grace_period_mins},date,window.start,window.end,now);
+    const data=buildReport(policy,[...new Map([...carried,...current,...extra].map(l=>[l.id,l])).values()],{...settings,grace_period_mins:policy.grace_period_mins},date,window.start,window.end,now,prayerWindowsByDay[date]||[]);
     const eligible=date>=begins&&policy.role==='employee'&&policy.is_active;
     const scheduled=eligible&&policy.work_days.includes(new Date(date+'T12:00:00Z').getUTCDay());
     const finished=now>=shift.end;
@@ -58,13 +58,14 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
     return {date,policy,scheduled,finished,status,...data,logCount:current.length,lateMinutes:data.punctuality.status==='late'?Math.max(0,data.punctuality.diffMinutes):0};
   });
   const branchTotals:Record<string,number>={};
-  let regular=0,overtime=0,outside=0,unknown=0,total=0,card=0;
+  let regular=0,overtime=0,outside=0,unknown=0,prayer=0,total=0,card=0;
   for(const d of days){
     const shift=shiftWindow(d.date,d.policy.shift_start,d.policy.shift_end);
     if(d.attendanceSource==='nfc'){card+=d.summary.cardMinutes;total+=d.summary.totalMinutes;regular+=d.summary.regularMinutes;overtime+=d.summary.overtimeMinutes;}
     for(const t of d.timeline){
       if(t.branch_id==='outside')outside+=t.durationMinutes;
       else if(t.branch_id==='unknown')unknown+=t.durationMinutes;
+      else if(t.branch_id==='prayer')prayer+=t.durationMinutes;
       else{
         branchTotals[t.branch_id]=(branchTotals[t.branch_id]||0)+t.durationMinutes;
         const s=Date.parse(t.start),e=Date.parse(t.end);
@@ -83,7 +84,7 @@ export function buildPeriodReport(user:AppUser, policies:EmployeePolicy[], logs:
     offDays:days.filter(d=>d.status==='off').length,pendingDays:days.filter(d=>d.status==='pending').length,
     unverifiedDays:days.filter(d=>d.status==='unverified').length,untrackedDays:days.filter(d=>d.status==='untracked').length,
     lateDays:days.filter(d=>d.status==='present'&&d.lateMinutes>0).length,
-    card:duration(card),late:duration(days.reduce((s,d)=>s+d.lateMinutes,0)),total:duration(total),regular:duration(regular),overtime:duration(overtime),outside:duration(outside),unknown:duration(unknown),
+    card:duration(card),late:duration(days.reduce((s,d)=>s+d.lateMinutes,0)),total:duration(total),regular:duration(regular),overtime:duration(overtime),outside:duration(outside),unknown:duration(unknown),prayer:duration(prayer),
     earlyDeparture:duration(days.reduce((s,d)=>s+d.summary.earlyDepartureMinutes,0)),exitCount:days.reduce((s,d)=>s+d.exitCount,0),
     branches:allIds.map(id=>({id,name:branchNames[id]||id,...duration(branchTotals[id]||0)})),
   }};

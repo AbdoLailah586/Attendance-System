@@ -88,6 +88,11 @@ export function ensureAttendanceSchema() {
     ALTER TABLE nfc_scans ADD COLUMN IF NOT EXISTS business_day DATE;
     ALTER TABLE nfc_scans ADD COLUMN IF NOT EXISTS flow_version INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE nfc_scans ADD COLUMN IF NOT EXISTS day_rule JSONB;
+    CREATE TABLE IF NOT EXISTS prayer_times (
+      date DATE PRIMARY KEY, fajr VARCHAR(5) NOT NULL, dhuhr VARCHAR(5) NOT NULL, asr VARCHAR(5) NOT NULL,
+      maghrib VARCHAR(5) NOT NULL, isha VARCHAR(5) NOT NULL, source VARCHAR(20) NOT NULL DEFAULT 'aladhan',
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS nfc_day_rules (
       user_id INTEGER NOT NULL REFERENCES users(id), business_day DATE NOT NULL,
       day_start TIMESTAMPTZ NOT NULL, day_end TIMESTAMPTZ NOT NULL,

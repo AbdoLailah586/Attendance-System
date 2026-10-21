@@ -8,6 +8,7 @@ import type {AppUser} from '@/lib/types';
 import { cairoTime, localDate, nextDay, shiftWindow, validDay, TIME_ZONE } from '@/lib/time';
 import { loadBleRangeSummaries } from '@/lib/ble';
 import { bleReportFields } from '@/lib/ble-report';
+import { prayerWindowsFor } from '@/lib/prayer-times';
 
 export async function GET(req: NextRequest) {
   try {
@@ -37,7 +38,8 @@ export async function GET(req: NextRequest) {
         UNION (SELECT * FROM attendance_logs WHERE user_id=$1 AND timestamp >= $2 AND timestamp < $3)
         ORDER BY timestamp, id`, [user.id, new Date(+rangeStart-86400000).toISOString(), new Date(+rangeEnd+86400000).toISOString()]);
       const ble=await loadBleRangeSummaries([user.id],+cairoTime(nextDay(reportDay))-2*86400000,+cairoTime(nextDay(reportDay))+36*3600000,[reportDay]);
-      return { user,date:reportDay, ...buildReport(user, result.rows, {...settings,grace_period_mins:user.grace_period_mins??settings.grace_period_mins}, reportDay, rangeStart, rangeEnd),...bleReportFields(ble.get(user.id)?.daily?.[reportDay]) };
+      const prayerWindows=await prayerWindowsFor(reportDay);
+      return { user,date:reportDay, ...buildReport(user, result.rows, {...settings,grace_period_mins:user.grace_period_mins??settings.grace_period_mins}, reportDay, rangeStart, rangeEnd, new Date(), prayerWindows),...bleReportFields(ble.get(user.id)?.daily?.[reportDay]) };
     }));
     return NextResponse.json({ date: day, timeZone: TIME_ZONE, settings, reports }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {
