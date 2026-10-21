@@ -1,6 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // @sparticuz/chromium ships its Chromium binary as package assets that Next.js's automatic
+  // output-file tracing does not always pick up for a route that only requires the package
+  // dynamically at runtime. Without this, the two PDF routes crash on Vercel with an immediate
+  // 500 (module load failure) despite building and working fine locally.
+  outputFileTracingIncludes: {
+    '/api/attendance/export': ['./node_modules/@sparticuz/chromium/**/*'],
+    '/api/attendance/daily-pdf': ['./node_modules/@sparticuz/chromium/**/*'],
+  },
   async headers() {
     return [
       { source: '/api/:path*', headers: [{key:'Cache-Control', value:'private, no-store'}] },
