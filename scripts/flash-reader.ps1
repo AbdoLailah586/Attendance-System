@@ -32,10 +32,12 @@ $taskConfigTarget=Join-Path $taskRepoRoot 'firmware\esp32-reader\include\attenda
 function Get-TaskEsp32Ports(){
   # Only ports exposed by a real USB device (a VID) are candidates; virtual/Bluetooth
   # COM ports report no VID and are never the ESP32's USB-UART bridge.
-  $taskListing=& $taskPython -c 'import serial.tools.list_ports,json
-print(json.dumps([{"device":p.device,"description":p.description,"vid":p.vid,"pid":p.pid} for p in serial.tools.list_ports.comports() if p.vid is not None]))'
+  $taskListing=& $taskPython -c "import serial.tools.list_ports,json
+print(json.dumps([{'device':p.device,'description':p.description,'vid':p.vid,'pid':p.pid} for p in serial.tools.list_ports.comports() if p.vid is not None]))"
   if($LASTEXITCODE -ne 0){throw 'Could not list serial ports (pyserial missing from the project runtime?).'}
-  return ,(@($taskListing | ConvertFrom-Json))
+  $taskParsed=$taskListing | ConvertFrom-Json
+  if($null -eq $taskParsed){return ,@()}
+  return ,(@($taskParsed))
 }
 
 Write-Host '[4/7] Detecting the ESP32 reader on USB...'

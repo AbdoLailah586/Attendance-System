@@ -62,6 +62,7 @@ export async function ensureBleSchema() {
       device_id UUID NOT NULL REFERENCES nfc_devices(id) ON DELETE CASCADE, address VARCHAR(17) NOT NULL,
       rssi INTEGER CHECK(rssi BETWEEN -127 AND 20), last_seen_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(device_id,address)
     );
+    ALTER TABLE ble_discovery_sightings ADD COLUMN IF NOT EXISTS name VARCHAR(32);
   `).catch(error => { migration = undefined; throw error; });
   return migration;
 }

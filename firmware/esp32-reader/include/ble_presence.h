@@ -36,7 +36,7 @@ bool bleConfigLoaded=false;
 // Admin-triggered discovery: briefly report ANY nearby advertised address (not just
 // already-assigned tags) so a brand-new tag can be identified and paired from the web UI.
 constexpr unsigned BLE_DISCOVERY_MAX=20;
-struct BleDiscoverySighting {char address[18]{};int rssi=0;unsigned long seenAt=0;bool used=false;};
+struct BleDiscoverySighting {char address[18]{};char name[32]{};int rssi=0;unsigned long seenAt=0;bool used=false;};
 BleDiscoverySighting bleDiscoveries[BLE_DISCOVERY_MAX];
 bool bleDiscoveryActive=false;
 time_t bleDiscoveryUntil=0;
@@ -157,12 +157,17 @@ class AttendanceBleScanCallbacks:public NimBLEScanCallbacks {
       bleTargets[i].addressType=device->getAddress().getType();bleTargets[i].advertised=true;break;
     }
     if(bleDiscoveryActive){
-      int rssi=device->getRSSI();int slot=-1;
-      for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(bleDiscoveries[i].used&&address==bleDiscoveries[i].address){slot=i;break;}
+      int rssi=device->getRSSI();int slot=-1;bool sameAddress=false;
+      for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(bleDiscoveries[i].used&&address==bleDiscoveries[i].address){slot=i;sameAddress=true;break;}
       if(slot<0)for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(!bleDiscoveries[i].used){slot=i;break;}
       if(slot<0){unsigned long oldest=ULONG_MAX;for(unsigned i=0;i<BLE_DISCOVERY_MAX;i++)if(bleDiscoveries[i].seenAt<oldest){oldest=bleDiscoveries[i].seenAt;slot=i;}}
-      if(slot>=0){strlcpy(bleDiscoveries[slot].address,address.c_str(),sizeof(bleDiscoveries[slot].address));
-        bleDiscoveries[slot].rssi=rssi;bleDiscoveries[slot].seenAt=millis();bleDiscoveries[slot].used=true;}
+      if(slot>=0){
+        if(!sameAddress)bleDiscoveries[slot].name[0]='\0'; // A reused slot must not keep a stale name from a previous address.
+        strlcpy(bleDiscoveries[slot].address,address.c_str(),sizeof(bleDiscoveries[slot].address));
+        bleDiscoveries[slot].rssi=rssi;bleDiscoveries[slot].seenAt=millis();bleDiscoveries[slot].used=true;
+        // Some beacons put the name in a separate scan-response packet; never overwrite a known name with a blank one.
+        if(device->haveName())strlcpy(bleDiscoveries[slot].name,device->getName().c_str(),sizeof(bleDiscoveries[slot].name));
+      }
     }
     xSemaphoreGive(bleLock);
   }
@@ -361,7 +366,8 @@ void bleUploadDiscoveries(){
   String endpoint=bleEndpoint("/api/ble/discovery");if(!endpoint.length())return;
   JsonDocument request;request["device_id"]=DEVICE_ID;JsonArray sightings=request["sightings"].to<JsonArray>();
   for(unsigned i=0;i<count;i++){JsonObject sighting=sightings.add<JsonObject>();sighting["address"]=snapshot[i].address;
-    if(snapshot[i].rssi<0&&snapshot[i].rssi>=-127)sighting["rssi"]=snapshot[i].rssi;}
+    if(snapshot[i].rssi<0&&snapshot[i].rssi>=-127)sighting["rssi"]=snapshot[i].rssi;
+    if(snapshot[i].name[0])sighting["name"]=snapshot[i].name;}
   WiFiClientSecure tls;tls.setCACert(TRUSTED_ROOTS);tls.setHandshakeTimeout(10);
   HTTPClient http;http.setReuse(false);http.setConnectTimeout(8000);http.setTimeout(8000);http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   if(!http.begin(tls,endpoint))return;

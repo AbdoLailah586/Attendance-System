@@ -7,7 +7,9 @@ export async function GET(req:NextRequest){
   const result=await periodReport(req);if(!result.ok)return result;
   const data=await result.json() as {mode:string;anchor:string;reports:PeriodReport[]};
   if(req.nextUrl.searchParams.get('format')==='pdf'){
-    const pdf=await renderPdfFromHtml(periodReportPdfHtml(data.reports,'تقرير الحضور والانصراف'));
+    const headings:{[k:string]:string}={weekly:'التقرير الأسبوعي لساعات الحضور',monthly:'التقرير الشهري لساعات الحضور'};
+    const heading=headings[req.nextUrl.searchParams.get('heading')||'']||'تقرير الحضور والانصراف';
+    const pdf=await renderPdfFromHtml(periodReportPdfHtml(data.reports,heading));
     return new NextResponse(new Uint8Array(pdf),{headers:{'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="attendance-${data.mode}-${data.anchor}.pdf"`,'Cache-Control':'private, no-store'}});
   }
   const details=req.nextUrl.searchParams.get('details')==='true';

@@ -9,7 +9,7 @@ import { bleDuration } from './BlePresenceCard';
 type Observation = { device_id: string; branch_name: string; state: 'seen' | 'not_seen' | 'unknown'; in_card_session: boolean; last_observation: string | null; rssi: number | null };
 type Tag = { id: number; address: string; user_id: number; name: string; grace_seconds: number; observations: Observation[] };
 type Device = { id: string; name: string; branch_name: string; receiver_state: 'ready' | 'fault' | 'stale' | 'disabled'; last_heartbeat: string | null };
-type Sighting = { address: string; rssi: number | null; last_seen_at: string };
+type Sighting = { address: string; rssi: number | null; name: string | null; last_seen_at: string };
 type Discovery = { active: boolean; until: string | null; sightings: Sighting[]; secondsLeft: number };
 type Log = { id: string; state: 'seen' | 'not_seen'; tag_address: string; recorded_at: string; received_at: string; user_name: string | null; branch_name: string; status: string; rssi: number | null };
 type Report = { user_id: number; user_name: string; device_id: string; device_name: string; branch_name: string; observed_seconds: number; not_seen_seconds: number; unknown_seconds: number; session_seconds: number };
@@ -104,7 +104,7 @@ export default function BleManager({ users }: { users: AppUser[] }) {
     </div>
     <div className="card" style={{ padding: 20 }}>
       <h3>اكتشاف تاج جديد قبل الربط</h3>
-      <p className="muted">شغّل التاج الجديدة بس وأطفئ باقي التاجات، اختار القارئ القريب منها، وابدأ الاكتشاف. القارئ بياخد شوية (لحد دقيقة تقريبًا) علشان يستلم أمر الاكتشاف من السيرفر، وبعدها بيفضل يدور لمدة {BLE_DISCOVERY_SECONDS} ثانية. لو العنوان مش ظاهر، دوس «ابدأ الاكتشاف» تاني.</p>
+      <p className="muted">شغّل التاج الجديدة بس وأطفئ باقي التاجات، اختار القارئ القريب منها، وابدأ الاكتشاف. القارئ بياخد شوية (لحد دقيقة تقريبًا) علشان يستلم أمر الاكتشاف من السيرفر، وبعدها بيفضل يدور لمدة {BLE_DISCOVERY_SECONDS} ثانية. لو العنوان مش ظاهر، دوس «ابدأ الاكتشاف» تاني. لو التاج بيبعت اسمه هيظهر جنب العنوان، لكن أغلب التاجات الرخيصة مش بتبعت اسم أصلًا؛ في الحالة دي استخدم «قوة الإشارة» (الأقرب للصفر = الأقرب فعليًا للقارئ).</p>
       <div className="metrics-grid">
         <label>القارئ<select className="form-input" value={discoveryDeviceId} onChange={e => { setDiscoveryDeviceId(e.target.value); setDiscovery(null); }}>
           <option value="">اختار القارئ</option>
@@ -120,6 +120,7 @@ export default function BleManager({ users }: { users: AppUser[] }) {
       </p>}
       {discovery?.sightings.length ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
         {discovery.sightings.map(sighting => <button key={sighting.address} type="button" className="btn btn-secondary btn-sm" onClick={() => setAddress(sighting.address)}>
+          {sighting.name ? <strong>{sighting.name}</strong> : null}{' '}
           <span dir="ltr">{sighting.address}</span>{sighting.rssi !== null && ` · قوة الإشارة ${sighting.rssi}`}
         </button>)}
       </div> : discovery?.active ? <p className="muted">مفيش عناوين ظاهرة لسه؛ تأكد إن التاج شغالة وقريبة من القارئ.</p> : null}

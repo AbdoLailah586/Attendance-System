@@ -12,8 +12,9 @@ export async function POST(req: NextRequest) {
     if (!body || typeof body.device_id !== 'string' || !Array.isArray(body.sightings) || body.sightings.length > 50)
       return NextResponse.json({ error: 'Invalid reader or sighting batch (0-50)' }, { status: 400 });
     for (const sighting of body.sightings) {
-      if (!sighting || !bleAddress(sighting.address) || (sighting.rssi !== undefined && sighting.rssi !== null && (!Number.isInteger(sighting.rssi) || sighting.rssi < -127 || sighting.rssi > 20)))
-        return NextResponse.json({ error: 'Invalid sighting address or RSSI' }, { status: 400 });
+      if (!sighting || !bleAddress(sighting.address) || (sighting.rssi !== undefined && sighting.rssi !== null && (!Number.isInteger(sighting.rssi) || sighting.rssi < -127 || sighting.rssi > 20))
+        || (sighting.name !== undefined && sighting.name !== null && (typeof sighting.name !== 'string' || sighting.name.length > 32)))
+        return NextResponse.json({ error: 'Invalid sighting address, RSSI or name' }, { status: 400 });
     }
     await ensureBleSchema();
     const client = await getPool().connect();
@@ -25,8 +26,10 @@ export async function POST(req: NextRequest) {
       const session = (await client.query('SELECT until FROM ble_discovery_sessions WHERE device_id=$1', [reader.id])).rows[0];
       const active = !!session && +new Date(session.until) > Date.now();
       if (active) for (const sighting of body.sightings) {
-        await client.query(`INSERT INTO ble_discovery_sightings(device_id,address,rssi,last_seen_at) VALUES($1,$2,$3,NOW())
-          ON CONFLICT(device_id,address) DO UPDATE SET rssi=$3,last_seen_at=NOW()`, [reader.id, bleAddress(sighting.address), sighting.rssi ?? null]);
+        // A name arrives only on some advertisement packets; never overwrite an already-known name with a blank one.
+        await client.query(`INSERT INTO ble_discovery_sightings(device_id,address,rssi,name,last_seen_at) VALUES($1,$2,$3,$4,NOW())
+          ON CONFLICT(device_id,address) DO UPDATE SET rssi=$3,name=COALESCE($4,ble_discovery_sightings.name),last_seen_at=NOW()`,
+          [reader.id, bleAddress(sighting.address), sighting.rssi ?? null, sighting.name || null]);
       }
       await client.query('COMMIT');
       return NextResponse.json({ success: true, active, until: active ? session.until : null }, { headers: { 'Cache-Control': 'no-store' } });

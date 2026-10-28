@@ -24,7 +24,7 @@ final class AdminReports {
     static SharedPreferences prefs(Context c){return c.getSharedPreferences("admin-reports",Context.MODE_PRIVATE);}
     static boolean admin(TrackingStore s){try{return "admin".equals(new JSONObject(s.prefs.getString("user","{}")).optString("role"));}catch(Exception e){return false;}}
     static boolean enabled(Context c){TrackingStore s=TrackingStore.get(c);return admin(s)&&prefs(c).getBoolean("enabled",false)&&prefs(c).getInt("owner",0)==s.userId();}
-    static void channel(Context c){c.getSystemService(NotificationManager.class).createNotificationChannel(new NotificationChannel(CHANNEL,"تقارير نهاية شيفت الموظفين",NotificationManager.IMPORTANCE_DEFAULT));}
+    static void channel(Context c){c.getSystemService(NotificationManager.class).createNotificationChannel(new NotificationChannel(CHANNEL,"تقارير الحضور التلقائية",NotificationManager.IMPORTANCE_DEFAULT));}
     static boolean permitted(Context c){channel(c);NotificationChannel channel=c.getSystemService(NotificationManager.class).getNotificationChannel(CHANNEL);return NotificationManagerCompat.from(c).areNotificationsEnabled()&&channel.getImportance()!=NotificationManager.IMPORTANCE_NONE;}
     static void clear(Context c){prefs(c).edit().clear().apply();WorkManager.getInstance(c).cancelAllWorkByTag(TAG);for(android.service.notification.StatusBarNotification n:c.getSystemService(NotificationManager.class).getActiveNotifications())if(CHANNEL.equals(n.getNotification().getChannelId()))NotificationManagerCompat.from(c).cancel(n.getTag(),n.getId());}
     static void enable(Context c){
@@ -52,24 +52,38 @@ final class AdminReports {
     // Activity and no storage permission (even pre-scoped-storage, its public-dir
     // writes have always been exempt) — the only option that works from a headless
     // WorkManager job with no UI to launch a save-location picker.
-    static void downloadDailyPdf(Context c,String day,String token){
+    static void downloadPdf(Context c,String reportUrl,String filename,String token){
+        if(reportUrl==null||!reportUrl.startsWith("/api/attendance/"))throw new IOException("Unsupported pdf path");
+        android.net.Uri uri=android.net.Uri.parse(TrackingStore.API+reportUrl);
+        String path=uri.getPath();
+        if(!"/api/attendance/daily-pdf".equals(path)&&!"/api/attendance/export".equals(path))throw new IOException("Unsupported pdf path");
+        if(filename==null||!filename.matches("[A-Za-z0-9._-]+\\.pdf")||filename.length()>80)filename="attendance-report.pdf";
         android.app.DownloadManager manager=(android.app.DownloadManager)c.getSystemService(Context.DOWNLOAD_SERVICE);
-        android.net.Uri uri=android.net.Uri.parse(TrackingStore.API+"/api/attendance/daily-pdf?date="+day);
-        String filename="daily-report-"+day+".pdf";
         android.app.DownloadManager.Request request=new android.app.DownloadManager.Request(uri)
             .addRequestHeader("Authorization","Bearer "+token)
-            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_HIDDEN)
+            .setTitle(filename).setDescription("تقرير حضور جو ستور")
+            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS,filename)
             .setMimeType("application/pdf").setAllowedOverMetered(true).setAllowedOverRoaming(true);
         manager.enqueue(request);
     }
-    static void notify(Context c,int id,String title,String body,String day,int employee,int owner){
+    static void notify(Context c,int id,String title,String body,String day,int employee,int owner){notify(c,id,title,body,day,employee,owner,false);}
+    static void notify(Context c,int id,String title,String body,String day,int employee,int owner,boolean openDownloads){
         if(Build.VERSION.SDK_INT>=33&&androidx.core.content.ContextCompat.checkSelfPermission(c,android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)throw new SecurityException("Notifications permission required");
-        channel(c);Intent target=new Intent(c,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        target.putExtra("report_day",day).putExtra("report_employee",employee).putExtra("report_owner",owner);
+        channel(c);
+        Intent target=openDownloads?new Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)
+            :new Intent(c,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("report_day",day).putExtra("report_employee",employee).putExtra("report_owner",owner);
         PendingIntent action=PendingIntent.getActivity(c,id,target,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         NotificationManagerCompat.from(c).notify(id,new NotificationCompat.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_admin_report)
             .setContentTitle(title).setContentText(body).setStyle(new NotificationCompat.BigTextStyle().bigText(body)).setContentIntent(action).setAutoCancel(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build());
+    }
+    private static boolean markDelivered(SharedPreferences p,String key,String day){
+        Set<String> delivered=new HashSet<>(p.getStringSet("delivered",Collections.emptySet()));
+        if(delivered.contains(key))return false;
+        delivered.add(key);
+        if(delivered.size()>500)delivered.removeIf(k->{int i=k.lastIndexOf(':');return i>=0&&k.substring(i+1).compareTo(day)<0;});
+        p.edit().putStringSet("delivered",delivered).apply();
+        return true;
     }
     static void check(Context c) throws Exception{
         if(!enabled(c)||!permitted(c))return;
@@ -80,15 +94,14 @@ final class AdminReports {
         for(int i=0;i<jobs.length();i++){
             JSONObject job=jobs.getJSONObject(i);if(!job.getBoolean("ready"))continue;String key=job.getString("key"),day=job.getString("business_day");
             if(p.getStringSet("delivered",Collections.emptySet()).contains(key))continue;
-            if("daily_pdf".equals(job.optString("kind","shift_report"))){
+            String kind=job.optString("kind","shift_report");
+            if("daily_pdf".equals(kind)||"weekly_pdf".equals(kind)||"monthly_pdf".equals(kind)){
                 synchronized(AdminReports.class){
                     if(!enabled(c)||owner!=store.userId()||!token.equals(store.token()))return;
-                    Set<String> delivered=new HashSet<>(p.getStringSet("delivered",Collections.emptySet()));if(delivered.contains(key))continue;
-                    downloadDailyPdf(c,day,token);
-                    notify(c,key.hashCode(),"تم حفظ التقرير اليومي","تقرير "+day+" لكل الموظفين (الحضور والانصراف والساعات والفجوات) تم حفظه في Downloads.",day,0,owner);
-                    delivered.add(key);
-                    if(delivered.size()>500)delivered.removeIf(k->k.substring(k.indexOf(':')+1).compareTo(day)<0);
-                    p.edit().putStringSet("delivered",delivered).apply();
+                    if(p.getStringSet("delivered",Collections.emptySet()).contains(key))continue;
+                    downloadPdf(c,job.getString("report_url"),job.optString("filename","attendance-"+day+".pdf"),token);
+                    notify(c,key.hashCode(),job.optString("title","تم حفظ تقرير الحضور"),job.optString("body","تم حفظ ملف PDF في Downloads."),day,0,owner,true);
+                    markDelivered(p,key,day);
                 }
                 continue;
             }
@@ -99,10 +112,9 @@ final class AdminReports {
             if(row.isNull("lastDeparture"))body+=" · لم يسجل انصرافًا بالكارت";
             synchronized(AdminReports.class){
                 if(!enabled(c)||owner!=store.userId()||!token.equals(store.token()))return;
-                Set<String> delivered=new HashSet<>(p.getStringSet("delivered",Collections.emptySet()));if(delivered.contains(key))continue;
-                notify(c,key.hashCode(),"تقرير شيفت "+job.getString("name"),body,day,job.getInt("user_id"),owner);delivered.add(key);
-                if(delivered.size()>500)delivered.removeIf(k->k.substring(k.indexOf(':')+1).compareTo(day)<0);
-                p.edit().putStringSet("delivered",delivered).putString("last_report",report.toString()).putString("last_report_day",day).apply();
+                if(!markDelivered(p,key,day))continue;
+                notify(c,key.hashCode(),"تقرير شيفت "+job.getString("name"),body,day,job.getInt("user_id"),owner);
+                p.edit().putString("last_report",report.toString()).putString("last_report_day",day).apply();
             }
         }
         if(!enabled(c)||owner!=store.userId()||!token.equals(store.token()))return;

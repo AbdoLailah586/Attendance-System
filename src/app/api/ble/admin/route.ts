@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
       await ensureBleSchema();
       const session = (await query('SELECT until FROM ble_discovery_sessions WHERE device_id=$1', [discoveryDevice])).rows[0];
       const active = !!session && +new Date(session.until) > Date.now();
-      const sightings = active ? (await query(`SELECT address,rssi,last_seen_at FROM ble_discovery_sightings s
+      const sightings = active ? (await query(`SELECT address,rssi,name,last_seen_at FROM ble_discovery_sightings s
         WHERE device_id=$1 AND NOT EXISTS(SELECT 1 FROM ble_tags t WHERE t.address=s.address AND t.revoked_at IS NULL)
         ORDER BY last_seen_at DESC LIMIT 50`, [discoveryDevice])).rows : [];
       return NextResponse.json({ active, until: active ? session.until : null, sightings, server_time: new Date().toISOString() }, { headers });

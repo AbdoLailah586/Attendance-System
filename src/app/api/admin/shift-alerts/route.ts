@@ -18,16 +18,30 @@ export async function GET(req:NextRequest){
       query<AppUser>("SELECT *,to_char(attendance_start_date,'YYYY-MM-DD') AS attendance_start_date FROM users WHERE role='employee' AND is_active=TRUE ORDER BY id"),
       query<EmployeePolicy>("SELECT *,to_char(effective_from,'YYYY-MM-DD') AS effective_from FROM employee_policies")
     ]);
-    const jobs=[];
+    const jobs:Array<{due_at:string;user_id:number|null;ready:boolean;[key:string]:unknown}>=[];
+    const pdfSend='01:00';
+    const inWindow=(due:number)=>due>=since&&due<=+now+48*3600000;
+    const pushPdf=(job:object,due:number)=>{if(inWindow(due))jobs.push({user_id:null,...job,due_at:new Date(due).toISOString(),ready:due<=+now});};
     for(let offset=-7;offset<=1;offset++){
       const day=addDays(current,offset);
-      // One combined, all-employees daily report PDF per business day, ready once that whole
-      // business day is over (3 AM Cairo the day after) — not tied to any single employee's
-      // shift ending, so it is computed once here rather than once per user below.
-      const dailyPdfDue=+cairoTime(addDays(day,1),'03:00');
-      if(dailyPdfDue>=since&&dailyPdfDue<=+now+48*3600000){
-        jobs.push({key:`daily-pdf:${day}`,kind:'daily_pdf',user_id:null,name:null,business_day:day,shift_day:day,
-          shift_start:null,due_at:new Date(dailyPdfDue).toISOString(),ready:dailyPdfDue<=+now,report_url:`/api/attendance/daily-pdf?date=${day}`});
+      // Combined PDFs for every employee: daily at 1 AM Cairo the next calendar day, weekly
+      // Saturday 1 AM covering Sat–Fri, monthly on the 1st at 1 AM covering the previous month.
+      const dailyPdfDue=+cairoTime(addDays(day,1),pdfSend);
+      pushPdf({key:`daily-pdf:${day}`,kind:'daily_pdf',business_day:day,shift_day:day,filename:`daily-report-${day}.pdf`,
+        title:'تم حفظ التقرير اليومي',body:`تقرير ${day} لساعات حضور كل موظف تم حفظه في Downloads.`,
+        report_url:`/api/attendance/daily-pdf?date=${day}`},dailyPdfDue);
+      if(new Date(day+'T12:00:00Z').getUTCDay()===5){
+        const weekStart=addDays(day,-6),weeklyDue=+cairoTime(addDays(day,1),pdfSend);
+        pushPdf({key:`weekly-pdf:${day}`,kind:'weekly_pdf',business_day:day,shift_day:day,filename:`weekly-report-${weekStart}-${day}.pdf`,
+          title:'تم حفظ التقرير الأسبوعي',body:`ساعات حضور كل موظف من ${weekStart} إلى ${day} تم حفظها في Downloads.`,
+          report_url:`/api/attendance/export?format=pdf&mode=weekly&start=${weekStart}&date=${weekStart}&heading=weekly`},weeklyDue);
+      }
+      const monthNext=addDays(day,1);
+      if(monthNext.slice(8,10)==='01'){
+        const monthStart=`${day.slice(0,8)}01`,monthlyDue=+cairoTime(monthNext,pdfSend);
+        pushPdf({key:`monthly-pdf:${day}`,kind:'monthly_pdf',business_day:day,shift_day:day,filename:`monthly-report-${day.slice(0,7)}.pdf`,
+          title:'تم حفظ التقرير الشهري',body:`ساعات حضور كل موظف خلال ${day.slice(0,7)} تم حفظها في Downloads.`,
+          report_url:`/api/attendance/export?format=pdf&mode=custom&start=${monthStart}&end=${day}&heading=monthly`},monthlyDue);
       }
       for(const user of users.rows){
         const own=policies.rows.filter(p=>p.user_id===user.id),rule=dailyRules(user,own,day,settings);
