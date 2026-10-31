@@ -51,3 +51,10 @@ scripts/__pycache__/
 artifacts/itag-ble-probe.json
 artifacts/itag-reader-production-verification.json
 artifacts/itag-reader-usb-verification.json
+
+# Google Drive credentials & backup storage
+*credentials*.json
+*secret*.json
+token.json
+data/
+backups/
