@@ -6,6 +6,7 @@ import { addDays, policyOn, type EmployeePolicy } from './period-report';
 import type { AppUser } from './types';
 import { cairoTime } from './time';
 import { broadcastPushToAdmins } from './fcm';
+import { sendDailyAttendanceWhatsApp } from './whatsapp';
 
 export interface DispatchResult {
   checked: number;
@@ -154,6 +155,13 @@ export async function dispatchReadyShiftAlerts(): Promise<DispatchResult> {
         report_url: job.report_url,
         filename: job.filename,
       });
+
+      // If this is a daily PDF report, also send summary & PDF link to the admin WhatsApp
+      if (job.kind === 'daily_pdf') {
+        sendDailyAttendanceWhatsApp(job.business_day).catch(err => {
+          console.error(`Failed to send WhatsApp daily report for ${job.business_day}:`, err);
+        });
+      }
 
       // If at least one device was reached, or if no devices are registered yet, record delivery to avoid spamming
       await query(

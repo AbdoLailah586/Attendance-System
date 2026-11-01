@@ -64,3 +64,4 @@ FIRE/
 *firebase*.json
 **/google-services.json
 
+.vscode/

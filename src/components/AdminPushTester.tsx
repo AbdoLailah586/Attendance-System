@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Bell, Send, Smartphone, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Bell, Send, Smartphone, RefreshCw, CheckCircle2, AlertCircle, MessageCircle, FileText } from 'lucide-react';
 
 interface DeviceItem {
   id: number;
@@ -15,9 +15,11 @@ export default function AdminPushTester() {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [sendingWp, setSendingWp] = useState(false);
   const [title, setTitle] = useState('إشعار تجريبي من إدارة جو ستور 🚀');
   const [body, setBody] = useState('تجربة وصول الإشعار عبر Firebase — يصلك والموبايل مقفول تماماً!');
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [wpResult, setWpResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const fetchDevices = async () => {
     setLoading(true);
@@ -68,6 +70,37 @@ export default function AdminPushTester() {
       });
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleSendWhatsAppReport = async () => {
+    setSendingWp(true);
+    setWpResult(null);
+    try {
+      const res = await fetch('/api/admin/test-whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullReport: true }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setWpResult({
+          success: true,
+          message: data.message || 'تم إرسال تقرير اليوم بنجاح إلى الواتساب مع رابط الـ PDF',
+        });
+      } else {
+        setWpResult({
+          success: false,
+          message: data.error || data.message || 'تعذر إرسال التقرير إلى الواتساب',
+        });
+      }
+    } catch (err: unknown) {
+      setWpResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'حدث خطأ في الاتصال بخدمة الواتساب',
+      });
+    } finally {
+      setSendingWp(false);
     }
   };
 
@@ -200,6 +233,70 @@ export default function AdminPushTester() {
           <span>{sending ? 'جاري الإرسال عبر Firebase...' : 'إرسال إشعار تجريبي الآن لجميع هواتف المديرين'}</span>
         </button>
       </form>
+
+      {/* WhatsApp Daily Report Section */}
+      <div
+        style={{
+          marginTop: '32px',
+          paddingTop: '24px',
+          borderTop: '1px solid #e5e7eb',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+          <MessageCircle size={22} color="#16a34a" />
+          <h4 style={{ margin: 0, color: '#15803d', fontSize: '1.1rem', fontWeight: 700 }}>
+            إرسال تقرير الحضور اليومي عبر الواتساب (WhatsApp CRM)
+          </h4>
+        </div>
+
+        <p className="muted" style={{ fontSize: '0.9rem', marginBottom: '16px', lineHeight: 1.6 }}>
+          يتم إرسال هذا التقرير تلقائياً كل يوم الساعة <strong>1:00 صباحاً (بتوقيت القاهرة)</strong> مع ملخص كامل لحضور وانصراف الموظفين ورابط مباشر لتحميل ملف الـ PDF إلى هاتف المدير رقم (<strong>01099930530</strong>).
+        </p>
+
+        {wpResult && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: '14px 18px',
+              borderRadius: '12px',
+              marginBottom: '16px',
+              fontWeight: 600,
+              fontSize: '0.95rem',
+              background: wpResult.success ? '#ecfdf5' : '#fef2f2',
+              color: wpResult.success ? '#059669' : '#dc2626',
+              border: `1px solid ${wpResult.success ? '#a7f3d0' : '#fecaca'}`,
+            }}
+          >
+            {wpResult.success ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
+            <span>{wpResult.message}</span>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={handleSendWhatsAppReport}
+          disabled={sendingWp}
+          className="btn"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '12px 24px',
+            fontSize: '1rem',
+            fontWeight: 700,
+            backgroundColor: '#16a34a',
+            borderColor: '#16a34a',
+            color: '#ffffff',
+            borderRadius: '8px',
+            cursor: sendingWp ? 'wait' : 'pointer',
+          }}
+        >
+          <FileText size={18} />
+          <span>{sendingWp ? 'جاري إرسال التقرير على الواتساب...' : 'تجربة إرسال تقرير اليوم الآن على واتساب المدير (01099930530)'}</span>
+        </button>
+      </div>
     </div>
   );
 }
