@@ -7,6 +7,7 @@ import {businessDay,dailyRules} from '@/lib/card-day';
 import {addDays,policyOn,type EmployeePolicy} from '@/lib/period-report';
 import type {AppUser} from '@/lib/types';
 import {cairoTime} from '@/lib/time';
+import {dispatchReadyShiftAlerts} from '@/lib/push-dispatcher';
 export async function GET(req:NextRequest){
   if((await getActiveSession(req))?.role!=='admin')return NextResponse.json({error:'صلاحيات المدير مطلوبة'},{status:403});
   try{
@@ -41,7 +42,7 @@ export async function GET(req:NextRequest){
         const monthStart=`${day.slice(0,8)}01`,monthlyDue=+cairoTime(monthNext,pdfSend);
         pushPdf({key:`monthly-pdf:${day}`,kind:'monthly_pdf',business_day:day,shift_day:day,filename:`monthly-report-${day.slice(0,7)}.pdf`,
           title:'تم حفظ التقرير الشهري',body:`ساعات حضور كل موظف خلال ${day.slice(0,7)} تم حفظها في Downloads.`,
-          report_url:`/api/attendance/export?format=pdf&mode=custom&start=${monthStart}&end=${day}&heading=monthly`},monthlyDue);
+          report_url:`/api/attendance/export?format=pdf&mode=custom&date=${monthStart}&start=${monthStart}&end=${day}&heading=monthly`},monthlyDue);
       }
       for(const user of users.rows){
         const own=policies.rows.filter(p=>p.user_id===user.id),rule=dailyRules(user,own,day,settings);
@@ -54,6 +55,7 @@ export async function GET(req:NextRequest){
       }
     }
     jobs.sort((a,b)=>a.due_at.localeCompare(b.due_at)||(a.user_id??0)-(b.user_id??0));
+    dispatchReadyShiftAlerts().catch(err => console.error('Auto dispatch error:', err));
     return NextResponse.json({server_time:now.toISOString(),timezone:'Africa/Cairo',next_due_at:jobs.find(j=>!j.ready)?.due_at||null,jobs},{headers:{'Cache-Control':'private, no-store'}});
   }catch(error){console.error('Shift alerts',error);return NextResponse.json({error:'تعذر تحميل مواعيد تقارير الشيفت'},{status:503});}
 }

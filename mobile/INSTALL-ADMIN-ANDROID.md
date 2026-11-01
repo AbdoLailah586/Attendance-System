@@ -1,7 +1,7 @@
-# إدارة جو ستور — Android (نسخة تجربة Debug، 2026-10-21)
+# إدارة جو ستور — Android (نسخة تجربة Debug، 2026-10-29)
 
 ملف التثبيت:
-`C:\Users\abdol\OneDrive\Desktop\task\atendance_system\artifacts\attendance-admin-android-debug-2026-10-21.apk`
+`C:\Users\abdol\OneDrive\Desktop\task\atendance_system\artifacts\attendance-admin-android-debug-2026-10-29.apk` (أو النسخة المباشرة: `artifacts\attendance-admin-android-debug.apk`)
 
 نسخة Debug مؤقتة (أول تسليم فعلي للعميل، لسه معملناش مفتاح توقيع Release). تتثبت عادي على أي موبايل بنفس طريقة أي APK خارج المتجر. لما نجهز مفتاح توقيع نهائي هنستبدلها بنسخة Release ويحتاج العميل يمسح هذه النسخة ويثبت الجديدة مرة واحدة بس (لاختلاف مفتاح التوقيع).
 

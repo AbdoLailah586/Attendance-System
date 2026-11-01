@@ -34,8 +34,36 @@ final class AdminReports {
         Constraints network=new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build();
         WorkManager.getInstance(c).enqueueUniquePeriodicWork(TAG,ExistingPeriodicWorkPolicy.KEEP,new PeriodicWorkRequest.Builder(AdminReportWorker.class,15,TimeUnit.MINUTES).setConstraints(network).addTag(TAG).build());
         refresh(c);
+        syncFcm(c);
     }
-    static void refresh(Context c){if(enabled(c))WorkManager.getInstance(c).enqueueUniqueWork(TAG+"-refresh",ExistingWorkPolicy.KEEP,new OneTimeWorkRequest.Builder(AdminReportWorker.class).setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).addTag(TAG).build());}
+    static void syncFcm(Context c){
+        try{
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken().addOnCompleteListener(task -> {
+                if(task.isSuccessful()&&task.getResult()!=null){
+                    sendTokenToServer(c,task.getResult());
+                }
+            });
+        }catch(Exception ignored){}
+    }
+    static void sendTokenToServer(Context c,String fcmToken){
+        if(fcmToken==null||fcmToken.isEmpty())return;
+        prefs(c).edit().putString("fcm_token",fcmToken).apply();
+        TrackingStore store=TrackingStore.get(c);int userId=store.userId();
+        if(userId==0)return;
+        TrackingStore.NETWORK.execute(()->{
+            try{
+                String token=store.token();
+                if(token==null||token.isEmpty())return;
+                HttpsURLConnection conn=(HttpsURLConnection)new URL(TrackingStore.API+"/api/notifications/register-device").openConnection();
+                conn.setRequestMethod("POST");conn.setDoOutput(true);conn.setConnectTimeout(10000);conn.setReadTimeout(15000);
+                conn.setRequestProperty("Content-Type","application/json");conn.setRequestProperty("Authorization","Bearer "+token);
+                JSONObject payload=new JSONObject();payload.put("token",fcmToken);payload.put("platform","android");
+                try(OutputStream os=conn.getOutputStream()){os.write(payload.toString().getBytes(StandardCharsets.UTF_8));}
+                conn.getResponseCode();conn.disconnect();
+            }catch(Exception ignored){}
+        });
+    }
+    static void refresh(Context c){if(enabled(c)){WorkManager.getInstance(c).enqueueUniqueWork(TAG+"-refresh",ExistingWorkPolicy.KEEP,new OneTimeWorkRequest.Builder(AdminReportWorker.class).setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).addTag(TAG).build());syncFcm(c);}}
     static JSONObject get(String path,String token) throws Exception{
         if(!path.startsWith("/api/attendance/day-close")&&!path.startsWith("/api/admin/shift-alerts"))throw new IOException("Unsupported report path");
         HttpsURLConnection connection=(HttpsURLConnection)new URL(TrackingStore.API+path).openConnection();
@@ -52,7 +80,7 @@ final class AdminReports {
     // Activity and no storage permission (even pre-scoped-storage, its public-dir
     // writes have always been exempt) — the only option that works from a headless
     // WorkManager job with no UI to launch a save-location picker.
-    static void downloadPdf(Context c,String reportUrl,String filename,String token){
+    static void downloadPdf(Context c,String reportUrl,String filename,String token) throws IOException{
         if(reportUrl==null||!reportUrl.startsWith("/api/attendance/"))throw new IOException("Unsupported pdf path");
         android.net.Uri uri=android.net.Uri.parse(TrackingStore.API+reportUrl);
         String path=uri.getPath();
@@ -71,7 +99,7 @@ final class AdminReports {
     static void notify(Context c,int id,String title,String body,String day,int employee,int owner,boolean openDownloads){
         if(Build.VERSION.SDK_INT>=33&&androidx.core.content.ContextCompat.checkSelfPermission(c,android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)throw new SecurityException("Notifications permission required");
         channel(c);
-        Intent target=openDownloads?new Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)
+        Intent target=openDownloads?new Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             :new Intent(c,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("report_day",day).putExtra("report_employee",employee).putExtra("report_owner",owner);
         PendingIntent action=PendingIntent.getActivity(c,id,target,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         NotificationManagerCompat.from(c).notify(id,new NotificationCompat.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_admin_report)
@@ -98,10 +126,9 @@ final class AdminReports {
             if("daily_pdf".equals(kind)||"weekly_pdf".equals(kind)||"monthly_pdf".equals(kind)){
                 synchronized(AdminReports.class){
                     if(!enabled(c)||owner!=store.userId()||!token.equals(store.token()))return;
-                    if(p.getStringSet("delivered",Collections.emptySet()).contains(key))continue;
+                    if(!markDelivered(p,key,day))continue;
                     downloadPdf(c,job.getString("report_url"),job.optString("filename","attendance-"+day+".pdf"),token);
                     notify(c,key.hashCode(),job.optString("title","تم حفظ تقرير الحضور"),job.optString("body","تم حفظ ملف PDF في Downloads."),day,0,owner,true);
-                    markDelivered(p,key,day);
                 }
                 continue;
             }

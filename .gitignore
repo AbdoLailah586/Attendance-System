@@ -58,3 +58,9 @@ artifacts/itag-reader-usb-verification.json
 token.json
 data/
 backups/
+
+# Firebase credentials
+FIRE/
+*firebase*.json
+**/google-services.json
+

@@ -107,6 +107,17 @@ export function ensureAttendanceSchema() {
       effective_at TIMESTAMPTZ NOT NULL,rules JSONB NOT NULL
     );
     CREATE INDEX IF NOT EXISTS nfc_day_rule_history_lookup ON nfc_day_rule_history(user_id,business_day,effective_at DESC);
+    CREATE TABLE IF NOT EXISTS admin_push_devices (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token TEXT NOT NULL UNIQUE,
+      platform VARCHAR(20) NOT NULL DEFAULT 'android',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS admin_push_deliveries (
+      job_key VARCHAR(100) PRIMARY KEY,
+      delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `).catch(error => { migration = undefined; throw error; });
   return migration;
 }

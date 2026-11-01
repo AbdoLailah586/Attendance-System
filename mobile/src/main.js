@@ -104,7 +104,10 @@ async function refresh(){
   if(refreshing)return;refreshing=true;const epoch=sessionEpoch;
   try{
     state=await Tracking.status();if(epoch!==sessionEpoch)return;
-    if(state.user){summary=cached('summary',state.user.id);presence=cached('presence',state.user.id);}else{summary=null;presence=null;}
+    if(state.user){
+      summary=cached('summary',state.user.id);presence=cached('presence',state.user.id);
+      if(state.user.role==='admin'&&Capacitor.getPlatform()==='android'){try{adminAlerts=await AdminReports.status();}catch{}}
+    }else{summary=null;presence=null;}
     presenceOnline=false;draw();if(state.user)await Tracking.sync();
     if(state.user){try{
       const {token}=await Tracking.session();const identity=await request('/api/auth/me',null,token);if(epoch!==sessionEpoch)return;
