@@ -10,12 +10,23 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    let customTitle = '';
+    let customBody = '';
+    try {
+      const json = await req.json();
+      if (typeof json?.title === 'string' && json.title.trim()) customTitle = json.title.trim();
+      if (typeof json?.body === 'string' && json.body.trim()) customBody = json.body.trim();
+    } catch {}
+
+    const title = customTitle || 'إشعار تجريبي من جو ستور 🚀';
+    const body = customBody || 'خدمة Firebase FCM تعمل بنجاح والإشعارات تصلك حتى لو التطبيق مقفول تماماً!';
+
     const devices = await query<{ count: string }>('SELECT COUNT(*) as count FROM admin_push_devices');
     const deviceCount = parseInt(devices.rows[0]?.count || '0', 10);
 
     const result = await broadcastPushToAdmins({
-      title: 'إشعار تجريبي من جو ستور 🚀',
-      body: 'خدمة Firebase FCM تعمل بنجاح والإشعارات تصلك حتى لو التطبيق مقفول تماماً!',
+      title,
+      body,
       kind: 'test_alert',
       timestamp: new Date().toISOString(),
     });

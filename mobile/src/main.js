@@ -93,7 +93,17 @@ function draw(){
   app.querySelector('#renew').onclick=()=>{sessionEpoch++;state={...state,user:null};presenceOnline=false;message='سجل الدخول بنفس الحساب للحفاظ على الأحداث السابقة';draw();};
   const admin=app.querySelector('#admin');if(admin)admin.onclick=async()=>{try{await Tracking.openAdmin();}catch(error){message=error.message;draw();}};
   const alerts=app.querySelector('#alerts');if(alerts)alerts.onclick=async()=>{try{if(adminAlerts.enabled)await AdminReports.disable();else await AdminReports.enable();adminAlerts=await AdminReports.status();message=adminAlerts.enabled?'تم تفعيل إشعارات التقارير التلقائية':'تم إيقاف التنبيهات';}catch(e){message=e.message;}draw();};
-  const testAlert=app.querySelector('#test-alert');if(testAlert)testAlert.onclick=async()=>{try{await AdminReports.test();message='تم إرسال إشعار اختبار على الهاتف';}catch(e){message=e.message;}draw();};
+  const testAlert=app.querySelector('#test-alert');if(testAlert)testAlert.onclick=async()=>{
+    working=true;message='جاري إرسال إشعار تجريبي لجميع هواتف المديرين عبر Firebase...';draw();
+    try{
+      const {token}=await Tracking.session();
+      const res=await request('/api/admin/test-push',{title:'إشعار تجريبي من إدارة جو ستور 🚀',body:'تجربة وصول الإشعار عبر Firebase — يصلك والموبايل مقفول تماماً!'},token);
+      message=res.message||'تم إرسال الإشعار بنجاح لجميع هواتف المديرين';
+    }catch(e){
+      try{await AdminReports.test();}catch{}
+      message=e.message||'تعذر إرسال الإشعار';
+    }finally{working=false;draw();}
+  };
   const reportDate=app.querySelector('#report-date');if(reportDate)reportDate.onchange=()=>{adminReportDate=reportDate.value;adminReport=null;void refresh();};
   const employeeFilter=app.querySelector('#report-employee');if(employeeFilter)employeeFilter.onchange=()=>{adminEmployee=employeeFilter.value;draw();};
   const reportToday=app.querySelector('#report-today');if(reportToday)reportToday.onclick=()=>{adminReportDate='current';adminReport=null;void refresh();};

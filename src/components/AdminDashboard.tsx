@@ -25,6 +25,7 @@ import NfcManager from './NfcManager';
 import BleManager from './BleManager';
 import LiveEmployeeCard, { needsPresenceReview, observedBranch } from './LiveEmployeeCard';
 import EmployeeEditor from './EmployeeEditor';
+import AdminPushTester from './AdminPushTester';
 import type { EmployeePolicy } from '@/lib/period-report';
 import type { AppUser, LiveEmployee } from '@/lib/types';
 import type { StoreSettings } from '@/lib/geo';
@@ -729,6 +730,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
               {savingSettings ? 'جاري الحفظ...' : 'حفظ الإعدادات الجغرافية'}
             </button>
           </form>
+          <AdminPushTester />
         </div>
       )}
 
