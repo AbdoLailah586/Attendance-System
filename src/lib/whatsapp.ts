@@ -53,7 +53,7 @@ export async function sendWhatsAppMessage(toPhone: string, text: string): Promis
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
       },
       body: JSON.stringify({
         to: cleanPhone,
@@ -105,11 +105,11 @@ export async function sendDailyAttendanceWhatsApp(day: string, targetPhone = DEF
     const pdfUrl = `${domain}/api/attendance/daily-pdf?date=${day}&key=${encodeURIComponent(secretKey)}`;
 
     let msg = `📊 *تقرير الحضور والانصراف اليومي — جو ستور* 📊\n`;
-    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `-----------------------------------\n`;
     msg += `📅 *يوم العمل:* ${day}\n`;
     msg += `🕒 *توقيت الإرسال:* الساعة 1:00 صباحاً (بتوقيت القاهرة)\n`;
     msg += `👥 *إجمالي الموظفين:* ${data.reports.length}\n`;
-    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    msg += `-----------------------------------\n\n`;
 
     if (!data.reports.length) {
       msg += `لا توجد سجلات حضور مسجلة لهذا اليوم.\n\n`;
@@ -134,7 +134,7 @@ export async function sendDailyAttendanceWhatsApp(day: string, targetPhone = DEF
       });
     }
 
-    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `-----------------------------------\n`;
     msg += `📥 *تحميل ملف الـ PDF المنسق كاملاً:* \n`;
     msg += `${pdfUrl}\n\n`;
     msg += `_تم الإرسال تلقائياً عبر نظام جو ستور الذكي._`;
