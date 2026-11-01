@@ -1,3 +1,4 @@
+import {dispatchReadyShiftAlerts} from '@/lib/push-dispatcher';
 import {NextRequest,NextResponse} from 'next/server';
 import {getPool,query} from '@/lib/db';
 import {ensureAttendanceSchema} from '@/lib/schema';
@@ -60,6 +61,7 @@ export async function POST(req:NextRequest){
       const replies=acknowledged.map(a=>{const d=details.find(d=>String(d.id)===String(a.scan_id));return {...a,...d,display_name:d?.username||'Unknown card',verification:'Presence observation separate from card attendance'};});
       await client.query('UPDATE nfc_devices SET last_seen_at=NOW() WHERE id=$1',[device.id]);
       await client.query('COMMIT');
+      dispatchReadyShiftAlerts().catch(err => console.error('NFC push dispatch error:', err));
       return NextResponse.json({success:true,acknowledged:replies,server_time:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}});
     }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
   }catch(error){console.error('Reader upload failed',error);return NextResponse.json({error:'Keep events and retry later'},{status:503});}

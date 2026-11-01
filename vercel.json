@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/shift-alerts",
-      "schedule": "*/10 * * * *"
+      "schedule": "0 23 * * *"
     }
   ]
 }
