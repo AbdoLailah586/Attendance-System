@@ -35,6 +35,18 @@ export async function reconcileDay(client:PoolClient,userId:number,day:string){
   if(!r)return;
   const scans=(await client.query(`SELECT * FROM nfc_scans WHERE user_id=$1 AND business_day=$2 AND flow_version=2
     ORDER BY recorded_at,id FOR UPDATE`,[userId,day])).rows;
+  // A previously locked schedule can give two business days the same shift date.
+  // Keep attendance outside this day's reconciliation and surface new scans for review.
+  const {rows:[{shift_conflict}]}=await client.query<{shift_conflict:boolean}>(`SELECT EXISTS (
+    SELECT 1 FROM attendance_logs
+    WHERE user_id=$1 AND shift_day=$2 AND source='nfc' AND event_type IN ('clock_in','clock_out')
+      AND (nfc_scan_id IS NULL OR nfc_scan_id<>ALL($3::bigint[]))
+  ) AS shift_conflict`,[userId,r.shift_day,scans.map(s=>s.id)]);
+  if(shift_conflict){
+    await client.query(`UPDATE nfc_scans SET status='shift_conflict',event_type=NULL
+      WHERE user_id=$1 AND business_day=$2 AND flow_version=2 AND reviewed_by IS NULL AND status='pending'`,[userId,day]);
+    return;
+  }
   const automatic=scans.filter(s=>!s.reviewed_by);
   if(automatic.length)await client.query("DELETE FROM attendance_logs WHERE source='nfc' AND nfc_scan_id=ANY($1::bigint[])",[automatic.map(s=>s.id)]);
   const manualIn=scans.find(s=>s.reviewed_by&&s.status==='accepted'&&s.event_type==='clock_in');
