@@ -5,6 +5,7 @@ import type { AppUser } from '@/lib/types';
 import { BLE_DISCOVERY_SECONDS, BLE_READER_CAPACITY } from '@/lib/ble-types';
 import { localDate } from '@/lib/time';
 import { bleDuration } from './BlePresenceCard';
+import ReaderStatusPanel from './ReaderStatusPanel';
 
 type Observation = { device_id: string; branch_name: string; state: 'seen' | 'not_seen' | 'unknown'; in_card_session: boolean; last_observation: string | null; rssi: number | null };
 type Tag = { id: number; address: string; user_id: number; name: string; grace_seconds: number; observations: Observation[] };
@@ -20,7 +21,6 @@ type Data = { tags: Tag[]; devices: Device[]; logs: Log[]; total: number; page: 
 const dateTime = (value: string | null) => value ? new Date(value).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' }) : 'لا توجد قراءة';
 const duration = bleDuration;
 const labels = { seen: 'مرصود', not_seen: 'غير مرصود · للمراجعة', unknown: 'غير معلوم' };
-const healthLabels = { ready: 'يعمل', fault: 'عطل في الرصد', stale: 'الاتصال غير محدّث', disabled: 'معطّل' };
 const colors = { seen: '#15803d', not_seen: '#b91c1c', unknown: '#64748b' };
 
 export default function BleManager({ users }: { users: AppUser[] }) {
@@ -97,11 +97,8 @@ export default function BleManager({ users }: { users: AppUser[] }) {
       <p>رصد الإشارة أثناء الفترة بين حضور الكارت والانصراف أو الحد الأقصى. الكروت تظل مصدر الحضور والانصراف. إصدار القارئ 1.4.3 يدعم حتى {BLE_READER_CAPACITY} تاجات؛ الإصدارات الأقدم تحتاج تحديثًا. نجاح اتصال الخمسة يتأكد بالاختبار الفعلي. يمكن ربط تاجات إضافية، لكن رصد أكثر من خمسة معًا يحتاج زيادة سعة القارئ واختبارها.</p>
       <p style={{ color: '#92400e' }}>وجود التاج لا يثبت وجود صاحبه. فقد الإشارة يظهر للمراجعة، وعطل القارئ أو انقطاع اتصاله يظهر «غير معلوم». هذه الفترات لا تُخصم تلقائيًا من الأجر.</p>
       {error && <p role="alert" style={{ color: '#b91c1c' }}>{error}</p>}
-      <div className="metrics-grid">{data?.devices.map(device => <div key={device.id} style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 14 }}>
-        <strong>{device.name} · {device.branch_name}</strong><p style={{ color: device.receiver_state === 'ready' ? '#15803d' : '#b91c1c' }}>{healthLabels[device.receiver_state]}</p>
-        <small>آخر نبضة: {dateTime(device.last_heartbeat)}</small>
-      </div>)}</div>
     </div>
+    <ReaderStatusPanel />
     <div className="card" style={{ padding: 20 }}>
       <h3>اكتشاف تاج جديد قبل الربط</h3>
       <p className="muted">شغّل التاج الجديدة بس وأطفئ باقي التاجات، اختار القارئ القريب منها، وابدأ الاكتشاف. القارئ بياخد شوية (لحد دقيقة تقريبًا) علشان يستلم أمر الاكتشاف من السيرفر، وبعدها بيفضل يدور لمدة {BLE_DISCOVERY_SECONDS} ثانية. لو العنوان مش ظاهر، دوس «ابدأ الاكتشاف» تاني. لو التاج بيبعت اسمه هيظهر جنب العنوان، لكن أغلب التاجات الرخيصة مش بتبعت اسم أصلًا؛ في الحالة دي استخدم «قوة الإشارة» (الأقرب للصفر = الأقرب فعليًا للقارئ).</p>

@@ -1,5 +1,44 @@
 export const BLE_READER_CAPACITY = 5;
 export const BLE_DISCOVERY_SECONDS = 120;
+export const BLE_PING_SECONDS = 120;
+export type BleReaderPing = {
+  ping_id: string;
+  started_at: string;
+  expires_at: string;
+  pong_at: string | null;
+  diagnostics: ReaderDiagnostics | null;
+  state: 'pending' | 'answered' | 'timed_out';
+};
+export interface ReaderDiagnostics {
+  firmware: string;
+  uptime_seconds: number;
+  reset_reason: string;
+  rssi_dbm: number | null;
+  wifi_disconnects: number;
+  wifi_last_reason: number;
+  clock_ready: boolean;
+  storage_ready: boolean;
+  rc522_ready: boolean;
+  ble_ready: boolean;
+  nfc_queued: number;
+  ble_queued: number;
+  nfc_probe_http: number;
+  nfc_probe_ack: boolean;
+  nfc_upload_http: number | null;
+  nfc_upload_ack: boolean;
+  nfc_last_ack_at: string | null;
+}
+export interface AdminReaderStatus {
+  id: string;
+  name: string;
+  branch_name: string;
+  connection: 'connected' | 'stale' | 'never_seen' | 'disabled';
+  last_seen_at: string | null;
+  receiver_state: 'ready' | 'fault' | 'stale' | 'disabled';
+  last_heartbeat_at: string | null;
+  last_scan_at: string | null;
+  ping: BleReaderPing | null;
+}
 export type BleObservationState = 'seen' | 'not_seen' | 'unknown';
 export type BleSessionState = 'waiting' | 'active' | 'closed' | 'expired';
 export interface BleSummary {

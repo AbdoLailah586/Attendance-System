@@ -54,6 +54,13 @@ export async function ensureBleSchema() {
       recorded_at TIMESTAMPTZ NOT NULL, received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), health_started_at TIMESTAMPTZ NOT NULL
     );
     CREATE INDEX IF NOT EXISTS ble_heartbeats_device_time ON ble_receiver_heartbeats(device_id,recorded_at DESC,id DESC);
+    CREATE TABLE IF NOT EXISTS ble_reader_pings (
+      device_id UUID PRIMARY KEY REFERENCES nfc_devices(id) ON DELETE CASCADE,
+      ping_id UUID NOT NULL, expires_at TIMESTAMPTZ NOT NULL, pong_at TIMESTAMPTZ
+    );
+    ALTER TABLE ble_reader_pings ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE ble_reader_pings ADD COLUMN IF NOT EXISTS diagnostics JSONB;
+    CREATE INDEX IF NOT EXISTS nfc_scans_device_received ON nfc_scans(device_id,received_at DESC,id DESC);
     CREATE TABLE IF NOT EXISTS ble_discovery_sessions (
       device_id UUID PRIMARY KEY REFERENCES nfc_devices(id) ON DELETE CASCADE,
       started_at TIMESTAMPTZ NOT NULL, until TIMESTAMPTZ NOT NULL, started_by INTEGER NOT NULL REFERENCES users(id)

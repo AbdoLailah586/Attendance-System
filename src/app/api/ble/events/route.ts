@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { uuid } from '@/lib/nfc';
+import { parseReaderDiagnostics } from '@/lib/reader-ping';
 import { BLE_DEFAULT_GRACE, BLE_STALE_SECONDS, activeCardSession, bleAddress, bleTime, ensureBleSchema, readerFor } from '@/lib/ble';
 
 export async function POST(req: NextRequest) {
@@ -47,8 +48,19 @@ export async function POST(req: NextRequest) {
         acknowledged.push({ event_id: event.event_id, status, duplicate: false });
       }
       await client.query('UPDATE nfc_devices SET last_seen_at=NOW() WHERE id=$1', [reader.id]);
+      let ping: string | null | undefined;
+      if (body.ping_protocol === 1) {
+        if (uuid(body.pong)) {
+          await client.query(`UPDATE ble_reader_pings SET pong_at=statement_timestamp(), diagnostics=$3
+            WHERE device_id=$1 AND ping_id=$2 AND pong_at IS NULL AND expires_at > statement_timestamp()`,
+          [reader.id, body.pong, parseReaderDiagnostics(body.diagnostics)]);
+        }
+        const pending = await client.query<{ ping_id: string }>(`SELECT ping_id FROM ble_reader_pings
+          WHERE device_id=$1 AND pong_at IS NULL AND expires_at > clock_timestamp()`, [reader.id]);
+        ping = pending.rows[0]?.ping_id ?? null;
+      }
       await client.query('COMMIT');
-      return NextResponse.json({ success: true, acknowledged, server_time: new Date().toISOString() }, { headers: { 'Cache-Control': 'no-store' } });
+      return NextResponse.json({ success: true, acknowledged, ping, server_time: new Date().toISOString() }, { headers: { 'Cache-Control': 'no-store' } });
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   } catch (error) { console.error('BLE upload', error); return NextResponse.json({ error: 'Keep observations and retry later' }, { status: 503 }); }
 }

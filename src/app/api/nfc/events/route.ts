@@ -11,9 +11,17 @@ export async function POST(req:NextRequest){
   try{
     await ensureAttendanceSchema();
     const b=await req.json().catch(()=>null);
-    if(!b||!uuid(b.device_id)||!Array.isArray(b.events)||b.events.length<1||b.events.length>100)return NextResponse.json({error:'Invalid device or batch (1–100 events)'},{status:400});
+    if(!b||!uuid(b.device_id)||!Array.isArray(b.events)||b.events.length>100)return NextResponse.json({error:'Invalid device or batch'}, {status:400});
     const credential=req.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
     if(!credential)return NextResponse.json({error:'Device credential required'},{status:401});
+    if(b.probe_id!==undefined||b.events.length===0){
+      if(!uuid(b.probe_id)||b.events.length!==0)return NextResponse.json({error:'Invalid NFC probe'}, {status:400});
+      // Check the same device identity and database as a real upload without recording a tap.
+      const device=(await query(`SELECT d.id FROM nfc_devices d JOIN branches b ON b.id=d.branch_id
+        WHERE d.id=$1 AND d.token_hash=$2 AND d.is_active AND b.is_active`,[b.device_id,tokenHash(credential)])).rows[0];
+      if(!device)return NextResponse.json({error:'Device disabled or credential invalid'}, {status:401});
+      return NextResponse.json({success:true,probe_id:b.probe_id},{headers:{'Cache-Control':'no-store'}});
+    }
     for(const e of b.events){
       if(!e||!uuid(e.event_id)||!cardUid(e.card_uid)||(e.recorded_at!==null&&(typeof e.recorded_at!=='string'||!/^\d{4}-\d\d-\d\dT.*(Z|[+-]\d\d:\d\d)$/.test(e.recorded_at)||!Number.isFinite(Date.parse(e.recorded_at)))))return NextResponse.json({error:'Invalid event ID, card UID, or UTC timestamp'},{status:400});
     }

@@ -14,6 +14,7 @@ struct BleTarget {
   unsigned long observedAt=0,eventAt=0,rssiAt=0,connectAt=0,batteryAt=0;
   uint8_t addressType=0;
   int rssi=0,battery=-1,lastError=0;
+  unsigned disconnects=0,connectFailures=0;
   bool everSeen=false,notSeenReported=false,connected=false,advertised=false;
 };
 SemaphoreHandle_t bleLock=nullptr;
@@ -26,6 +27,7 @@ unsigned long bleWorkerAt=0,bleLastAckAt=0,bleConfigAt=0,bleNetworkAt=0;
 int bleLastHttpCode=0;
 unsigned bleQueued=0,bleForeignQueued=0;
 String bleBootId,bleConfigSource="none";
+String blePendingPing; // Only the HTTPS worker reads and writes the challenge.
 String bleTestAddresses[BLE_MAX_TAGS];
 unsigned bleTestCount=0;
 const char* bleRadioError="starting";
@@ -230,7 +232,10 @@ void bleWorker(void*){
           xSemaphoreGive(bleLock);
         }
       }else{
-        xSemaphoreTake(bleLock,portMAX_DELAY);tag.connected=false;tag.batteryCharacteristic=nullptr;xSemaphoreGive(bleLock);
+        xSemaphoreTake(bleLock,portMAX_DELAY);
+        if(tag.connected)tag.disconnects++;
+        tag.connected=false;tag.batteryCharacteristic=nullptr;
+        xSemaphoreGive(bleLock);
         if(bleRadioReady&&millis()-tag.connectAt>=BLE_RETRY_MS){
           // A separate worker may wait here without blocking NFC, LCD, feedback or USB commands.
           tag.connectAt=millis();scan->stop();
@@ -239,7 +244,10 @@ void bleWorker(void*){
           client->setConnectTimeout(3000);client->setConnectionParams(24,48,0,100);
           uint8_t type=tag.advertised?tag.addressType:static_cast<uint8_t>((tag.connectAt/BLE_RETRY_MS)%2);
           bool connected=client->connect(NimBLEAddress(std::string(tag.config.address),type),true,false,false);
-          xSemaphoreTake(bleLock,portMAX_DELAY);tag.connected=connected;tag.lastError=client->getLastError();xSemaphoreGive(bleLock);
+          xSemaphoreTake(bleLock,portMAX_DELAY);
+          tag.connected=connected;tag.lastError=client->getLastError();
+          if(!connected)tag.connectFailures++;
+          xSemaphoreGive(bleLock);
           if(connected){
             int rssi=client->getRssi();
             xSemaphoreTake(bleLock,portMAX_DELAY);tag.rssi=rssi;tag.observedAt=millis();tag.rssiAt=millis();xSemaphoreGive(bleLock);
@@ -302,6 +310,7 @@ void bleWriteStatus(JsonDocument& status){
     entry["address"]=tag.config.address;entry["experimental_usb_target"]=tag.config.localTest;entry["connected"]=tag.connected;
     entry["state"]=!bleHealthy()?"unknown":!tag.everSeen?"unknown":tag.notSeenReported?"not_seen":"seen";
     entry["grace_seconds"]=tag.config.grace;entry["last_error"]=tag.lastError;
+    entry["disconnects"]=tag.disconnects;entry["connect_failures"]=tag.connectFailures;
     if(tag.config.trackingUntil)entry["tracking_until"]=bleUtcTimestamp(tag.config.trackingUntil);
     if(tag.config.localTest)entry["test_remaining_seconds"]=millis()-bleTestStarted<bleTestDuration?(bleTestDuration-(millis()-bleTestStarted))/1000:0;
     if(tag.observedAt)entry["last_observed_age_ms"]=millis()-tag.observedAt;else entry["last_observed_age_ms"]=nullptr;
@@ -378,9 +387,40 @@ void bleUploadDiscoveries(){
   }}
   http.end();
 }
+void bleWritePingDiagnostics(JsonObject status,const String& ping){
+  JsonDocument request;request["device_id"]=DEVICE_ID;request["probe_id"]=ping;request["events"].to<JsonArray>();
+  int probeCode=0;bool probeAck=false;
+  WiFiClientSecure tls;tls.setCACert(TRUSTED_ROOTS);tls.setHandshakeTimeout(5);
+  HTTPClient http;http.setReuse(false);http.setConnectTimeout(4000);http.setTimeout(4000);http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  if(http.begin(tls,API_URL)){
+    http.addHeader("Content-Type","application/json");http.addHeader("Authorization",String("Bearer ")+DEVICE_TOKEN);
+    String body;serializeJson(request,body);probeCode=http.POST(body);
+    if(probeCode==200){
+      JsonDocument response;
+      probeAck=!deserializeJson(response,http.getString())&&response["success"]==true&&response["probe_id"].as<String>()==ping;
+    }
+    http.end();
+  }
+  status["firmware"]=FIRMWARE_VERSION;status["uptime_seconds"]=millis()/1000;status["reset_reason"]=resetReason();
+  if(WiFi.status()==WL_CONNECTED)status["rssi_dbm"]=WiFi.RSSI();else status["rssi_dbm"]=nullptr;
+  status["wifi_disconnects"]=wifiDisconnectEvents.load();status["wifi_last_reason"]=wifiLastDisconnectReason.load();
+  status["clock_ready"]=utcNow()!=0;status["storage_ready"]=diskReady.load()&&!storageFault.load();
+  status["rc522_ready"]=readerReady.load();status["ble_ready"]=bleHealthy();
+  status["nfc_queued"]=countQueuedTaps();
+  xSemaphoreTake(diskLock,portMAX_DELAY);status["ble_queued"]=bleQueued;xSemaphoreGive(diskLock);
+  status["nfc_probe_http"]=probeCode;status["nfc_probe_ack"]=probeAck;
+  if(nfcUploadAttempted)status["nfc_upload_http"]=nfcUploadHttp;else status["nfc_upload_http"]=nullptr;
+  status["nfc_upload_ack"]=nfcUploadAck;
+  if(nfcLastAckAt)status["nfc_last_ack_at"]=bleUtcTimestamp(nfcLastAckAt);else status["nfc_last_ack_at"]=nullptr;
+}
 void bleUploadObservations(){
   String endpoint=bleEndpoint("/api/ble/events");if(!endpoint.length())return;
   JsonDocument request;request["device_id"]=DEVICE_ID;request["receiver_state"]=bleHealthy()?"ready":"fault";
+  request["ping_protocol"]=1;
+  if(blePendingPing.length()){
+    request["pong"]=blePendingPing;
+    bleWritePingDiagnostics(request["diagnostics"].to<JsonObject>(),blePendingPing);
+  }
   request["boot_id"]=bleBootId;request["heartbeat_at"]=bleUtcTimestamp(utcNow());JsonArray events=request["events"].to<JsonArray>();
   xSemaphoreTake(diskLock,portMAX_DELAY);File directory=diskReady?LittleFS.open("/blequeue"):File();
   if(directory){File file=directory.openNextFile();while(file&&events.size()<20){
@@ -397,6 +437,8 @@ void bleUploadObservations(){
   http.addHeader("Content-Type","application/json");http.addHeader("Authorization",String("Bearer ")+DEVICE_TOKEN);
   String body;serializeJson(request,body);int code=http.POST(body);bleLastHttpCode=code;
   if(code==200){JsonDocument response;if(!deserializeJson(response,http.getString())&&response["acknowledged"].is<JsonArray>()){
+    const char* ping=response["ping"]|"";
+    blePendingPing=strlen(ping)==36?ping:"";
     xSemaphoreTake(diskLock,portMAX_DELAY);
     for(JsonObject ack:response["acknowledged"].as<JsonArray>()){
       String id=ack["event_id"]|"",status=ack["status"]|"";bool sent=false;
@@ -413,7 +455,7 @@ void bleNetworkCycle(){
   unsigned long now=millis();
   if(!bleConfigAt||now-bleConfigAt>=BLE_CONFIG_MS){bleConfigAt=now;bleRefreshConfig();}
   now=millis();
-  if(!bleNetworkAt||now-bleNetworkAt>=BLE_REPORT_MS||(bleQueued&&now-bleNetworkAt>=5000)){
+  if(!bleNetworkAt||now-bleNetworkAt>=BLE_REPORT_MS||((bleQueued||blePendingPing.length())&&now-bleNetworkAt>=BLE_RETRY_MS)){
     bleNetworkAt=now;bleUploadObservations();
   }
   now=millis();

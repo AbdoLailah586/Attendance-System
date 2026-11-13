@@ -7,26 +7,33 @@ import serial
 
 
 def reply(port, command, expected, timeout=8):
-    port.write((command + "\n").encode("utf-8"))
-    port.flush()
+    request = (command + "\n").encode("utf-8")
+    port.write(request)
     deadline = time.monotonic() + timeout
     retry_at = time.monotonic() + 1.5
+    pending = b""
     while time.monotonic() < deadline:
         # Status is read-only and safe to retry if concurrent upload logs obscure
         # a reply. Never resend a configuration/format command automatically.
         if expected == "status" and time.monotonic() >= retry_at:
-            port.write((command + "\n").encode("utf-8"))
-            port.flush()
+            port.write(request)
             retry_at = time.monotonic() + 1.5
-        line = port.readline()
-        if not line.startswith(b"{"):
+        available = port.in_waiting
+        if not available:
+            time.sleep(0.02)
             continue
-        try:
-            value = json.loads(line)
-        except (ValueError, UnicodeDecodeError):
-            continue
-        if value.get("command") == expected:
-            return value
+        # Some USB-UART drivers block on an empty read even with a timeout.
+        pending += port.read(min(available, 4096))
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", 1)
+            if not line.startswith(b"{"):
+                continue
+            try:
+                value = json.loads(line)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if isinstance(value, dict) and value.get("command") == expected:
+                return value
     raise RuntimeError("No USB reply. Close Serial Monitor and install firmware 1.2.0 or newer first.")
 
 
