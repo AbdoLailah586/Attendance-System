@@ -84,12 +84,8 @@ def main():
             }
             if "networks" in settings:
                 networks = settings["networks"]
-                if not isinstance(networks, list) or not 1 <= len(networks) <= 2:
-                    raise RuntimeError("Provide one or two Wi-Fi networks.")
-                if len(networks) > 1:
-                    version = tuple(int(part) for part in status.get("firmware", "0.0.0").split("."))
-                    if version < (1, 4, 4):
-                        raise RuntimeError("Two Wi-Fi networks require firmware 1.4.4 or newer.")
+                if not isinstance(networks, list) or not 1 <= len(networks) <= 6:
+                    raise RuntimeError("Provide between one and six Wi-Fi networks.")
                 request["networks"] = networks
             else:
                 request.update(ssid=settings["ssid"], password=settings["password"])

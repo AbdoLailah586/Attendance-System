@@ -118,6 +118,20 @@ export function ensureAttendanceSchema() {
       job_key VARCHAR(100) PRIMARY KEY,
       delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS reader_wifi_networks (
+      id SERIAL PRIMARY KEY,
+      ssid VARCHAR(32) NOT NULL,
+      password VARCHAR(64) NOT NULL,
+      note VARCHAR(100),
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    INSERT INTO reader_wifi_networks (ssid, password, note)
+    SELECT 'JOESTOREJOESTORE', 'JOESTORE@JOESTORE', 'الفرع الرئيسي'
+    WHERE NOT EXISTS (SELECT 1 FROM reader_wifi_networks WHERE ssid = 'JOESTOREJOESTORE');
+    INSERT INTO reader_wifi_networks (ssid, password, note)
+    SELECT '3bdo', 'not abdo2', 'هوتسبوت التجربة'
+    WHERE NOT EXISTS (SELECT 1 FROM reader_wifi_networks WHERE ssid = '3bdo');
   `).catch(error => { migration = undefined; throw error; });
   return migration;
 }

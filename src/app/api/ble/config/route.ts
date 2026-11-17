@@ -26,8 +26,10 @@ export async function GET(req: NextRequest) {
         tags.push({ address: tag.address, grace_seconds: tag.grace_seconds, enabled: !!session, tracking_active: !!session,
           tracking_until: session ? new Date(session.finish).toISOString() : null });
       }
+      const wifiRows = (await client.query("SELECT ssid,password FROM reader_wifi_networks WHERE is_active=TRUE ORDER BY id LIMIT 5")).rows;
       return NextResponse.json({ protocol: 'attendance-ble-v1', mode: 'experimental', heartbeat_seconds: BLE_HEARTBEAT_SECONDS,
         receiver_stale_seconds: BLE_STALE_SECONDS, default_grace_seconds: BLE_DEFAULT_GRACE, tags,
+        wifi_networks: wifiRows,
         capacity_exceeded: tags.filter(t => t.enabled).length > BLE_READER_CAPACITY, target_reader_capacity: BLE_READER_CAPACITY, server_time: new Date().toISOString(),
         discovery: discoveryActive ? { enabled: true, until: discoveryUntil!.toISOString() } : { enabled: false } },
       { headers: { 'Cache-Control': 'private, no-store' } });

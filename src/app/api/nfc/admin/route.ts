@@ -19,13 +19,19 @@ export async function GET(req:NextRequest){
     const p=req.nextUrl.searchParams,page=Math.max(1,Number(p.get('page'))||1);
     if(!Number.isInteger(page)||page>100000)return NextResponse.json({error:'صفحة غير صالحة'},{status:400});
     const filter=p.get('review')==='true'?"AND s.status NOT IN ('accepted','rapid_repeat','after_checkout','duplicate_action','ignored','before_start')":'';
-    const [devices,cards,scans,count,branches]=await Promise.all([
+    const [devices,cards,scans,count,branches,wifiNetworks,unassignedScans]=await Promise.all([
       query('SELECT id,name,branch_id,is_active,last_seen_at,created_at FROM nfc_devices ORDER BY created_at'),
       query('SELECT c.*,u.name,u.username FROM nfc_cards c JOIN users u ON u.id=c.user_id WHERE revoked_at IS NULL ORDER BY c.id'),
       query(`SELECT s.*,to_char(s.shift_day,'YYYY-MM-DD') AS shift_day,u.name AS user_name,d.name AS device_name FROM nfc_scans s LEFT JOIN users u ON u.id=s.user_id JOIN nfc_devices d ON d.id=s.device_id WHERE TRUE ${filter} ORDER BY s.received_at DESC,s.id DESC LIMIT 100 OFFSET $1`,[(page-1)*100]),
-      query(`SELECT count(*)::int AS total FROM nfc_scans s WHERE TRUE ${filter}`),query('SELECT id,name FROM branches WHERE is_active=TRUE ORDER BY id')
+      query(`SELECT count(*)::int AS total FROM nfc_scans s WHERE TRUE ${filter}`),query('SELECT id,name FROM branches WHERE is_active=TRUE ORDER BY id'),
+      query('SELECT id,ssid,password,note,is_active,created_at FROM reader_wifi_networks ORDER BY id'),
+      query(`SELECT s.card_uid, max(s.received_at) as last_seen, count(*)::int as scan_count, max(d.name) as device_name
+             FROM nfc_scans s JOIN nfc_devices d ON d.id=s.device_id
+             WHERE (s.user_id IS NULL OR s.status='unknown_card')
+               AND NOT EXISTS (SELECT 1 FROM nfc_cards c WHERE c.uid=s.card_uid AND c.revoked_at IS NULL)
+             GROUP BY s.card_uid ORDER BY max(s.received_at) DESC LIMIT 10`)
     ]);
-    return NextResponse.json({devices:devices.rows,cards:cards.rows,scans:scans.rows,total:count.rows[0].total,branches:branches.rows},{headers:{'Cache-Control':'private, no-store'}});
+    return NextResponse.json({devices:devices.rows,cards:cards.rows,scans:scans.rows,total:count.rows[0].total,branches:branches.rows,wifi_networks:wifiNetworks.rows,unassigned_scans:unassignedScans.rows},{headers:{'Cache-Control':'private, no-store'}});
   }catch(e){console.error('NFC admin read',e);return NextResponse.json({error:'تعذر تحميل القارئات والكروت'},{status:503});}
 }
 export async function POST(req:NextRequest){
@@ -45,6 +51,23 @@ export async function POST(req:NextRequest){
       if(!result.rows.length)return NextResponse.json({error:'القارئ غير موجود'},{status:404});
       return NextResponse.json({success:true,...(b.action==='rotate_device'?{device_id:b.id,token}:{})});
     }
+    if(b.action==='add_wifi'){
+      if(typeof b.ssid!=='string'||!b.ssid.trim()||b.ssid.length>32)return NextResponse.json({error:'اسم الشبكة SSID مطلوب (بحد أقصى 32 حرف)'},{status:400});
+      if(typeof b.password!=='string'||(b.password.length>0&&(b.password.length<8||b.password.length>63)))return NextResponse.json({error:'كلمة المرور يجب أن تكون بين 8 و 63 حرفًا أو فارغة للشبكات المفتوحة'},{status:400});
+      const note=typeof b.note==='string'?b.note.trim().slice(0,100):null;
+      await query('INSERT INTO reader_wifi_networks(ssid,password,note) VALUES($1,$2,$3)',[b.ssid.trim(),b.password,note]);
+      return NextResponse.json({success:true});
+    }
+    if(b.action==='delete_wifi'){
+      if(!Number.isInteger(b.id))return NextResponse.json({error:'معرف غير صالح'},{status:400});
+      await query('DELETE FROM reader_wifi_networks WHERE id=$1',[b.id]);
+      return NextResponse.json({success:true});
+    }
+    if(b.action==='toggle_wifi'){
+      if(!Number.isInteger(b.id)||typeof b.is_active!=='boolean')return NextResponse.json({error:'معرف أو حالة غير صالحة'},{status:400});
+      await query('UPDATE reader_wifi_networks SET is_active=$2 WHERE id=$1',[b.id,b.is_active]);
+      return NextResponse.json({success:true});
+    }
     const client=await getPool().connect();
     try{
       await client.query('BEGIN');
@@ -53,8 +76,28 @@ export async function POST(req:NextRequest){
         const uid=cardUid(b.uid);
         if(!uid||!Number.isInteger(b.user_id)||!(await client.query("SELECT id FROM users WHERE id=$1 AND role='employee' AND is_active=TRUE",[b.user_id])).rows.length){await client.query('ROLLBACK');return NextResponse.json({error:'كارت وحساب موظف نشط مطلوبان'},{status:400});}
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[uid]);
-        if((await client.query('SELECT id FROM nfc_cards WHERE uid=$1 AND revoked_at IS NULL',[uid])).rows.length){await client.query('ROLLBACK');return NextResponse.json({error:'الكارت مرتبط بالفعل؛ ألغِ الربط القديم قبل نقله'},{status:409});}
+        const existing = await client.query('SELECT c.id,c.user_id,u.name FROM nfc_cards c JOIN users u ON u.id=c.user_id WHERE c.uid=$1 AND c.revoked_at IS NULL',[uid]);
+        if(existing.rows.length){
+          if(b.transfer || existing.rows[0].user_id === b.user_id){
+            await client.query('UPDATE nfc_cards SET revoked_at=NOW() WHERE uid=$1 AND revoked_at IS NULL',[uid]);
+          } else {
+            await client.query('ROLLBACK');
+            return NextResponse.json({
+              error:`الكارت مرتبط بالفعل بالموظف (${existing.rows[0].name}). هل تريد نقل ملكيته؟`,
+              is_assigned: true,
+              current_owner: existing.rows[0].name,
+              current_user_id: existing.rows[0].user_id
+            },{status:409});
+          }
+        }
         await client.query('INSERT INTO nfc_cards(uid,user_id) VALUES($1,$2)',[uid,b.user_id]);
+      }else if(b.action==='transfer_card'){
+        const uid=cardUid(b.uid);
+        const newUserId=Number(b.new_user_id||b.user_id);
+        if(!uid||!Number.isInteger(newUserId)||!(await client.query("SELECT id FROM users WHERE id=$1 AND role='employee' AND is_active=TRUE",[newUserId])).rows.length){await client.query('ROLLBACK');return NextResponse.json({error:'كارت وحساب موظف نشط مطلوبان'},{status:400});}
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[uid]);
+        await client.query('UPDATE nfc_cards SET revoked_at=NOW() WHERE uid=$1 AND revoked_at IS NULL',[uid]);
+        await client.query('INSERT INTO nfc_cards(uid,user_id) VALUES($1,$2)',[uid,newUserId]);
       }else if(b.action==='revoke_card'){
         if(!Number.isInteger(b.id)){await client.query('ROLLBACK');return NextResponse.json({error:'كارت غير صالح'},{status:400});}
         const result=await client.query('UPDATE nfc_cards SET revoked_at=NOW() WHERE id=$1 AND revoked_at IS NULL RETURNING id',[b.id]);

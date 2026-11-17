@@ -363,6 +363,9 @@ void bleRefreshConfig(){
   if(code==200){JsonDocument config;if(!deserializeJson(config,http.getString())){
     if(bleApplyConfig(config,"server"))bleCacheConfig(config);
     bleApplyDiscovery(config);
+    if(config["wifi_networks"].is<JsonArrayConst>()){
+      syncWifiFromServer(config["wifi_networks"].as<JsonArrayConst>());
+    }
   }}
   http.end();
 }

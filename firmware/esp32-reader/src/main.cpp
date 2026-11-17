@@ -27,7 +27,7 @@ String lastCard;
 unsigned long lastCardSeen=0,ledAt=0;
 std::atomic<bool> storageFault{false};
 bool ledActive=false;
-constexpr const char* FIRMWARE_VERSION="1.4.6";
+constexpr const char* FIRMWARE_VERSION="1.4.7";
 #ifndef WIFI_FALLBACK_SSID
 #define WIFI_FALLBACK_SSID ""
 #endif
@@ -35,7 +35,8 @@ constexpr const char* FIRMWARE_VERSION="1.4.6";
 #define WIFI_FALLBACK_PASSWORD ""
 #endif
 struct WifiProfile {String ssid,password;};
-WifiProfile wifiNetworks[2];
+constexpr uint8_t WIFI_MAX_NETWORKS=6;
+WifiProfile wifiNetworks[WIFI_MAX_NETWORKS];
 uint8_t wifiNetworkCount=0,wifiNetworkIndex=0;
 unsigned long wifiAttemptAt=0;
 std::atomic<unsigned> wifiDisconnectEvents{0},wifiLastDisconnectReason{0};
@@ -52,12 +53,6 @@ String eventUuid();
 time_t utcNow();
 unsigned countQueuedTaps();
 const char* resetReason();
-#include "ble_presence.h"
-void emitSerialJson(JsonDocument& document){
-  String line;serializeJson(document,line);line+='\n';
-  // A single UART write keeps upload-task log messages out of a JSON response.
-  Serial.write(reinterpret_cast<const uint8_t*>(line.c_str()),line.length());
-}
 bool validWifi(const String& ssid,const String& password){
   if(ssid.length()==0||ssid.length()>32)return false;
   for(size_t i=0;i<ssid.length();i++)if(ssid[i]=='\0')return false;
@@ -72,15 +67,17 @@ bool parseWifiProfiles(const JsonDocument& config,WifiProfile* profiles,uint8_t&
   count=0;
   if(config["networks"].is<JsonArrayConst>()){
     JsonArrayConst networks=config["networks"].as<JsonArrayConst>();
-    if(networks.size()<1||networks.size()>2)return false;
+    if(networks.size()<1||networks.size()>WIFI_MAX_NETWORKS)return false;
     for(JsonObjectConst network:networks){
       if(!network["ssid"].is<String>()||!network["password"].is<String>())return false;
       String ssid=network["ssid"].as<String>(),password=network["password"].as<String>();
-      if(!validWifi(ssid,password)||(count&&ssid==profiles[0].ssid))return false;
+      if(!validWifi(ssid,password))return false;
+      bool duplicate=false;
+      for(uint8_t k=0;k<count;k++)if(profiles[k].ssid==ssid)duplicate=true;
+      if(duplicate)continue;
       profiles[count++]={ssid,password};
     }
   }else{
-    // Keep existing USB tools and single-network NVS settings compatible.
     if(!config["networks"].isUnbound()||!config["ssid"].is<String>()||!config["password"].is<String>())return false;
     String ssid=config["ssid"].as<String>(),password=config["password"].as<String>();
     if(!validWifi(ssid,password))return false;
@@ -88,15 +85,68 @@ bool parseWifiProfiles(const JsonDocument& config,WifiProfile* profiles,uint8_t&
   }
   return count>0;
 }
+bool persistWifiProfiles(const WifiProfile* profiles,uint8_t count){
+  JsonDocument config;config["device_id"]=DEVICE_ID;JsonArray networks=config["networks"].to<JsonArray>();
+  for(uint8_t i=0;i<count;i++){JsonObject network=networks.add<JsonObject>();network["ssid"]=profiles[i].ssid;network["password"]=profiles[i].password;}
+  String saved;serializeJson(config,saved);
+  Preferences preferences;bool persisted=false;
+  if(preferences.begin("attendance",false)){
+    String current=preferences.getString("wifi","");
+    if(current!=saved)persisted=preferences.putString("wifi",saved)>0;
+    else persisted=true;
+    preferences.end();
+  }
+  if(persisted){
+    wifiNetworkCount=count;for(uint8_t i=0;i<count;i++)wifiNetworks[i]=profiles[i];
+    storedWifi=true;
+  }
+  return persisted;
+}
+void syncWifiFromServer(const JsonArrayConst& remoteNetworks){
+  if(remoteNetworks.size()==0)return;
+  JsonDocument wrap;wrap["networks"]=remoteNetworks;
+  WifiProfile parsed[WIFI_MAX_NETWORKS];uint8_t count=0;
+  if(parseWifiProfiles(wrap,parsed,count)){
+    bool different=count!=wifiNetworkCount;
+    for(uint8_t i=0;i<count&&!different;i++){
+      if(parsed[i].ssid!=wifiNetworks[i].ssid||parsed[i].password!=wifiNetworks[i].password)different=true;
+    }
+    if(different){
+      if(persistWifiProfiles(parsed,count)){
+        Serial.printf("Server Wi-Fi updated: %d networks saved to flash memory.\n",count);
+      }
+    }
+  }
+}
 void startWifiProfile(){
   if(!wifiNetworkCount)return;
   wifiAttemptAt=millis();WiFi.disconnect(false,false);
   WiFi.begin(wifiNetworks[wifiNetworkIndex].ssid.c_str(),wifiNetworks[wifiNetworkIndex].password.c_str());
 }
 void wifiTick(){
-  // One owner on the main loop; no blocking scan and no Wi-Fi changes from the upload worker.
-  if(WiFi.status()!=WL_CONNECTED&&wifiNetworkCount&&millis()-wifiAttemptAt>=15000){
-    wifiNetworkIndex=(wifiNetworkIndex+1)%wifiNetworkCount;startWifiProfile();
+  if(WiFi.status()!=WL_CONNECTED&&wifiNetworkCount&&millis()-wifiAttemptAt>=12000){
+    wifiAttemptAt=millis();
+    // Fast scan to check if any known network is in the air
+    int16_t found=WiFi.scanNetworks(false,false,false,800);
+    int8_t bestIndex=-1;int bestRssi=-999;
+    if(found>0){
+      for(int16_t i=0;i<found;i++){
+        String ssid=WiFi.SSID(i);
+        for(uint8_t j=0;j<wifiNetworkCount;j++){
+          if(ssid==wifiNetworks[j].ssid){
+            int rssi=WiFi.RSSI(i);
+            if(rssi>bestRssi){bestRssi=rssi;bestIndex=j;}
+          }
+        }
+      }
+      WiFi.scanDelete();
+    }
+    if(bestIndex>=0){
+      wifiNetworkIndex=bestIndex;
+    }else{
+      wifiNetworkIndex=(wifiNetworkIndex+1)%wifiNetworkCount;
+    }
+    startWifiProfile();
   }
 }
 void loadWifi(){
@@ -108,17 +158,18 @@ void loadWifi(){
   String saved=preferences.getString("wifi","");preferences.end();
   JsonDocument config;
   if(saved.length()&&!deserializeJson(config,saved)&&config["device_id"].as<String>()==DEVICE_ID){
-    WifiProfile savedProfiles[2];uint8_t count;
+    WifiProfile savedProfiles[WIFI_MAX_NETWORKS];uint8_t count;
     if(parseWifiProfiles(config,savedProfiles,count)){
-      if(config["networks"].is<JsonArrayConst>()){
-        wifiNetworkCount=count;for(uint8_t i=0;i<count;i++)wifiNetworks[i]=savedProfiles[i];
-      }else{
-        wifiNetworks[0]=savedProfiles[0];if(!wifiNetworkCount)wifiNetworkCount=1;
-        if(wifiNetworkCount==2&&wifiNetworks[1].ssid==wifiNetworks[0].ssid)wifiNetworkCount=1;
-      }
+      wifiNetworkCount=count;for(uint8_t i=0;i<count;i++)wifiNetworks[i]=savedProfiles[i];
       storedWifi=true;
     }
   }
+}
+#include "ble_presence.h"
+void emitSerialJson(JsonDocument& document){
+  String line;serializeJson(document,line);line+='\n';
+  // A single UART write keeps upload-task log messages out of a JSON response.
+  Serial.write(reinterpret_cast<const uint8_t*>(line.c_str()),line.length());
 }
 const char* resetReason(){
   switch(esp_reset_reason()){
@@ -188,18 +239,12 @@ void handleSerialCommand(const String& command){
   if(!parsed||request["command"]!="wifi_config"){response["error"]="invalid_command";}
   else if(request["device_id"].as<String>()!=DEVICE_ID){response["error"]="wrong_reader";}
   else{
-    WifiProfile profiles[2];uint8_t count;
+    WifiProfile profiles[WIFI_MAX_NETWORKS];uint8_t count;
     if(!parseWifiProfiles(request,profiles,count))response["error"]="invalid_wifi";
     else{
-      JsonDocument config;config["device_id"]=DEVICE_ID;JsonArray networks=config["networks"].to<JsonArray>();
-      for(uint8_t i=0;i<count;i++){JsonObject network=networks.add<JsonObject>();network["ssid"]=profiles[i].ssid;network["password"]=profiles[i].password;}
-      String saved;serializeJson(config,saved);
-      Preferences preferences;bool persisted=false;
-      if(preferences.begin("attendance",false)){persisted=preferences.putString("wifi",saved)>0;preferences.end();}
-      if(!persisted)response["error"]="storage_failed";
+      if(!persistWifiProfiles(profiles,count))response["error"]="storage_failed";
       else{
-        wifiNetworkCount=count;for(uint8_t i=0;i<count;i++)wifiNetworks[i]=profiles[i];
-        wifiNetworkIndex=0;storedWifi=true;startWifiProfile();
+        wifiNetworkIndex=0;startWifiProfile();
         response["ok"]=true;lastTapId="";
       }
     }
