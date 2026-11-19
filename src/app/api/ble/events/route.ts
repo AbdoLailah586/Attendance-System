@@ -41,10 +41,15 @@ export async function POST(req: NextRequest) {
         const tag = (await client.query(`SELECT id,user_id,grace_seconds FROM ble_tags WHERE address=$1 AND assigned_at<=$2
           AND (revoked_at IS NULL OR revoked_at>$2) ORDER BY assigned_at DESC LIMIT 1`, [address, time])).rows[0];
         const session = tag ? await activeCardSession(client, tag.user_id, time!) : null;
-        const status = tag ? (session ? 'accepted' : 'outside_session') : 'unknown_tag';
+        const activeTest = tag ? (await client.query(
+          'SELECT 1 FROM ble_test_sessions WHERE tag_address=$1 AND is_active=TRUE AND until > $2',
+          [address, time]
+        )).rows.length > 0 : false;
+        const inSessionOrTest = !!session || activeTest;
+        const status = tag ? (inSessionOrTest ? 'accepted' : 'outside_session') : 'unknown_tag';
         await client.query(`INSERT INTO ble_events(device_id,event_id,boot_id,tag_address,tag_assignment_id,user_id,branch_id,state,recorded_at,rssi,grace_seconds,status)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [reader.id, event.event_id, event.boot_id || body.boot_id, address, tag?.id || null, session ? tag.user_id : null, reader.branch_id, event.state, time, event.rssi ?? null, tag?.grace_seconds || BLE_DEFAULT_GRACE, status]);
+        [reader.id, event.event_id, event.boot_id || body.boot_id, address, tag?.id || null, inSessionOrTest ? tag.user_id : null, reader.branch_id, event.state, time, event.rssi ?? null, tag?.grace_seconds || BLE_DEFAULT_GRACE, status]);
         acknowledged.push({ event_id: event.event_id, status, duplicate: false });
       }
       await client.query('UPDATE nfc_devices SET last_seen_at=NOW() WHERE id=$1', [reader.id]);
