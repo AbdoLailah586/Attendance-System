@@ -34,6 +34,18 @@ constexpr const char* FIRMWARE_VERSION="1.4.7";
 #ifndef WIFI_FALLBACK_PASSWORD
 #define WIFI_FALLBACK_PASSWORD ""
 #endif
+#ifndef WIFI_NET3_SSID
+#define WIFI_NET3_SSID ""
+#endif
+#ifndef WIFI_NET3_PASSWORD
+#define WIFI_NET3_PASSWORD ""
+#endif
+#ifndef WIFI_NET4_SSID
+#define WIFI_NET4_SSID ""
+#endif
+#ifndef WIFI_NET4_PASSWORD
+#define WIFI_NET4_PASSWORD ""
+#endif
 struct WifiProfile {String ssid,password;};
 constexpr uint8_t WIFI_MAX_NETWORKS=6;
 WifiProfile wifiNetworks[WIFI_MAX_NETWORKS];
@@ -153,6 +165,10 @@ void loadWifi(){
   if(validWifi(WIFI_SSID,WIFI_PASSWORD))wifiNetworks[wifiNetworkCount++]={WIFI_SSID,WIFI_PASSWORD};
   if(validWifi(WIFI_FALLBACK_SSID,WIFI_FALLBACK_PASSWORD)&&(!wifiNetworkCount||wifiNetworks[0].ssid!=WIFI_FALLBACK_SSID))
     wifiNetworks[wifiNetworkCount++]={WIFI_FALLBACK_SSID,WIFI_FALLBACK_PASSWORD};
+  if(validWifi(WIFI_NET3_SSID,WIFI_NET3_PASSWORD))
+    wifiNetworks[wifiNetworkCount++]={WIFI_NET3_SSID,WIFI_NET3_PASSWORD};
+  if(validWifi(WIFI_NET4_SSID,WIFI_NET4_PASSWORD))
+    wifiNetworks[wifiNetworkCount++]={WIFI_NET4_SSID,WIFI_NET4_PASSWORD};
   Preferences preferences;
   if(!preferences.begin("attendance",false))return;
   String saved=preferences.getString("wifi","");preferences.end();
