@@ -18,8 +18,18 @@ export async function GET(req: NextRequest) {
     const date = req.nextUrl.searchParams.get('date');
     if (!date || !validDay(date)) return NextResponse.json({ error: 'تاريخ غير صالح' }, { status: 400 });
 
+    const userIdParam = req.nextUrl.searchParams.get('userId');
+    let userQuery = `SELECT id, name, role FROM users WHERE role = 'employee' AND is_active = TRUE`;
+    const queryParams: any[] = [];
+    if (userIdParam && userIdParam !== 'all' && !Number.isNaN(Number(userIdParam))) {
+      userQuery += ` AND id = $1`;
+      queryParams.push(Number(userIdParam));
+    }
+    userQuery += ` ORDER BY id ASC`;
+
     const users = (await query<{ id: number; name: string; role: string }>(
-      `SELECT id, name, role FROM users WHERE role = 'employee' AND is_active = TRUE ORDER BY id ASC`
+      userQuery,
+      queryParams
     )).rows;
 
     const timelines = await Promise.all(

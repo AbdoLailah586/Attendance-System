@@ -25,8 +25,20 @@ export default function AttendanceReports({users,refreshKey}:{users:AppUser[];re
     const link=document.createElement('a');link.href='/api/attendance/export?'+params;link.download='attendance.csv';document.body.appendChild(link);link.click();link.remove();
   };
   const downloadPdf=()=>{
+    if (mode === 'daily') {
+      const targetDate = date || localDate();
+      const params = new URLSearchParams({ date: targetDate });
+      if (userId && userId !== 'all') params.set('userId', userId);
+      const link = document.createElement('a');
+      link.href = '/api/attendance/daily-pdf?' + params;
+      link.download = `daily-report-${targetDate}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return;
+    }
     const params=new URLSearchParams({mode,date,start,end,format:'pdf'});if(userId!=='all')params.set('userId',userId);
-    const link=document.createElement('a');link.href='/api/attendance/export?'+params;link.download='attendance.pdf';document.body.appendChild(link);link.click();link.remove();
+    const link=document.createElement('a');link.href='/api/attendance/export?'+params;link.download=`attendance-${mode}-${start}.pdf`;document.body.appendChild(link);link.click();link.remove();
   };
   return <section className="attendance-reports">
     <div className="card report-controls"><h3>تقارير الحضور ورصد الوجود</h3><p className="muted">تقارير فعلية بتوقيت القاهرة، مع تفاصيل كل يوم وكل فرع. يظهر رصد التاج منفصلًا عن سجلات GPS والكارت.</p>

@@ -570,11 +570,148 @@ export function dailyReportPdfHtml(businessDay: string, timelines: EmployeeDaily
 
 // Keep legacy interfaces for backwards compatibility with period reports
 export interface PdfTimelineEntry { branch_id: string; branch_name: string; start: string; end: string; durationFormatted: string }
+
+const PERIOD_STATUS_LABELS: Record<string, string> = {
+  present: 'حاضر',
+  absent: 'غائب',
+  off: 'راحة أسبوعية',
+  pending: 'الشيفت لم ينتهِ',
+  upcoming: 'لم يبدأ الشيفت',
+  unverified: 'حضور غير مؤكد',
+  untracked: 'خارج فترة المتابعة'
+};
+
+function formatClockTime(val: string | null | undefined): string {
+  if (!val) return '—';
+  try {
+    return new Date(val).toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', hour12: true });
+  } catch {
+    return '—';
+  }
+}
+
+function formatBleSeconds(sec = 0): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return `${h} س ${m} د`;
+  return `${m} دقيقة`;
+}
+
 export function periodReportPdfHtml(reports: any[], title: string): string {
   const range = reports[0] ? `${reports[0].start || ''} — ${reports[0].end || ''}` : '';
-  const generatedAt = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' });
-  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${title}</title><style>${PDF_STYLES}</style></head>
-    <body><header class="masthead"><div><div class="brand">نظام الحضور والانصراف</div><h1>${title}</h1></div>
-    <div class="meta-box"><div>${range}</div><div>Generated ${generatedAt}</div></div></header>
-    </body></html>`;
+  const generatedAt = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' });
+
+  const sectionsHtml = (reports || []).map(r => {
+    const u = r.user || {};
+    const s = r.summary || {};
+    const days = r.days || [];
+
+    const dayRows = days.map((d: any) => {
+      const statusText = PERIOD_STATUS_LABELS[d.status] || d.status;
+      const isAbsent = d.status === 'absent';
+      const isPresent = d.status === 'present';
+      const statusClass = isPresent ? 'highlight-green' : isAbsent ? 'highlight-red' : '';
+      const arrival = formatClockTime(d.firstArrival);
+      const departure = formatClockTime(d.lastDeparture);
+      const bleObserved = d.ble_has_history ? formatBleSeconds(d.ble_summary?.observed_seconds) : '—';
+      const bleNotSeen = d.ble_has_history ? formatBleSeconds(d.ble_summary?.not_seen_seconds) : '—';
+
+      return `<tr>
+        <td>${d.date}</td>
+        <td class="${statusClass}"><strong>${statusText}</strong></td>
+        <td>${d.policy?.shift_start || '—'} - ${d.policy?.shift_end || '—'}</td>
+        <td class="ltr-cell">${arrival}</td>
+        <td class="ltr-cell">${departure}</td>
+        <td>${d.summary?.totalFormatted || '—'}</td>
+        <td>${bleObserved}</td>
+        <td style="${d.ble_summary?.not_seen_seconds > 0 ? 'color:#dc2626;font-weight:700;' : ''}">${bleNotSeen}</td>
+        <td>${d.summary?.prayerFormatted || '0 دقيقة'}</td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="employee-page">
+        <header class="masthead">
+          <div>
+            <div class="brand">نظام الحضور والانصراف • جو ستور</div>
+            <h1>${title}: ${u.name || ''}</h1>
+            <div class="subtitle">اسم المستخدم: ${u.username || ''} • الفترة: ${r.start || ''} إلى ${r.end || ''}</div>
+          </div>
+          <div class="meta-box">
+            <div style="font-weight:700; color:#1e3a8a;">${days.length} يوم في الفترة</div>
+            <div style="color:#64748b; font-size:10px;">أُنشئ: ${generatedAt}</div>
+          </div>
+        </header>
+
+        <div class="stat-grid-main">
+          <div class="stat-box primary">
+            <span class="stat-label">📅 أيام الحضور الفعلي</span>
+            <span class="stat-val highlight-green">${s.presentDays ?? 0} يوم</span>
+          </div>
+          <div class="stat-box unexcused">
+            <span class="stat-label">❌ أيام الغياب الكامل</span>
+            <span class="stat-val highlight-red">${s.absentDays ?? 0} يوم</span>
+          </div>
+          <div class="stat-box unexcused">
+            <span class="stat-label">⚠️ إجمالي الغياب وعدم التواجد</span>
+            <span class="stat-val highlight-red">${s.absenceTotal?.formatted || '0 دقيقة'}</span>
+          </div>
+          <div class="stat-box prayer">
+            <span class="stat-label">🕌 مستثنى أوقات الصلاة</span>
+            <span class="stat-val highlight-yellow">${s.prayer?.formatted || '0 دقيقة'}</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">🏷️ فترة الكارت المعتمدة</span>
+            <span class="stat-val highlight-blue">${s.card?.formatted || '0 دقيقة'}</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">🏬 داخل الفروع المحددة</span>
+            <span class="stat-val">${s.total?.formatted || '0 دقيقة'}</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">☕ أيام الراحة</span>
+            <span class="stat-val">${s.offDays ?? 0} يوم</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">⏰ أيام التأخير</span>
+            <span class="stat-val">${s.lateDays ?? 0} يوم</span>
+          </div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-header">سجل تفاصيل أيام الفترة</div>
+          <table>
+            <thead>
+              <tr>
+                <th>التاريخ</th>
+                <th>الحالة</th>
+                <th>الشيفت</th>
+                <th>وصل</th>
+                <th>انصرف</th>
+                <th>إجمالي الوقت</th>
+                <th>رصد التاج</th>
+                <th>التاج غير مرصود</th>
+                <th>وقت الصلاة</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${dayRows || '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:12px;">لا توجد سجلات في هذه الفترة</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>${title} - ${range}</title>
+  <style>${PDF_STYLES}</style>
+</head>
+<body>
+  ${sectionsHtml || '<div style="padding:40px;text-align:center;font-size:16px;">لا توجد بيانات متاحة لهذا التقرير</div>'}
+</body>
+</html>`;
 }
