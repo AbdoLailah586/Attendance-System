@@ -27,27 +27,26 @@ export async function GET(req: NextRequest) {
           tracking_until: session ? new Date(session.finish).toISOString() : null });
       }
 
-      // Check if there is an active test session for tag identification
+      // Check if there are active test sessions for tag identification/testing
       const testSessions = (await client.query<{ tag_address: string; until: Date }>(
         `SELECT tag_address, until FROM ble_test_sessions 
-         WHERE is_active = TRUE AND until > NOW() 
-         ORDER BY id DESC LIMIT 1`
+         WHERE is_active = TRUE AND until > NOW()`
       )).rows;
 
-      if (testSessions.length > 0) {
-        const activeTest = testSessions[0];
+      for (const activeTest of testSessions) {
+        const untilIso = new Date(activeTest.until).toISOString().replace(/\.\d{3}Z$/, 'Z');
         const existing = tags.find(t => t.address.toUpperCase() === activeTest.tag_address.toUpperCase());
         if (existing) {
           existing.enabled = true;
           existing.tracking_active = true;
-          existing.tracking_until = new Date(activeTest.until).toISOString();
+          existing.tracking_until = untilIso;
         } else {
           tags.push({
             address: activeTest.tag_address.toUpperCase(),
             grace_seconds: 60,
             enabled: true,
             tracking_active: true,
-            tracking_until: new Date(activeTest.until).toISOString(),
+            tracking_until: untilIso,
           });
         }
       }
