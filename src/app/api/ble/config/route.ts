@@ -26,6 +26,32 @@ export async function GET(req: NextRequest) {
         tags.push({ address: tag.address, grace_seconds: tag.grace_seconds, enabled: !!session, tracking_active: !!session,
           tracking_until: session ? new Date(session.finish).toISOString() : null });
       }
+
+      // Check if there is an active test session for tag identification
+      const testSessions = (await client.query<{ tag_address: string; until: Date }>(
+        `SELECT tag_address, until FROM ble_test_sessions 
+         WHERE is_active = TRUE AND until > NOW() 
+         ORDER BY id DESC LIMIT 1`
+      )).rows;
+
+      if (testSessions.length > 0) {
+        const activeTest = testSessions[0];
+        const existing = tags.find(t => t.address.toUpperCase() === activeTest.tag_address.toUpperCase());
+        if (existing) {
+          existing.enabled = true;
+          existing.tracking_active = true;
+          existing.tracking_until = new Date(activeTest.until).toISOString();
+        } else {
+          tags.push({
+            address: activeTest.tag_address.toUpperCase(),
+            grace_seconds: 60,
+            enabled: true,
+            tracking_active: true,
+            tracking_until: new Date(activeTest.until).toISOString(),
+          });
+        }
+      }
+
       const wifiRows = (await client.query("SELECT ssid,password FROM reader_wifi_networks WHERE is_active=TRUE ORDER BY id LIMIT 5")).rows;
       return NextResponse.json({ protocol: 'attendance-ble-v1', mode: 'experimental', heartbeat_seconds: BLE_HEARTBEAT_SECONDS,
         receiver_stale_seconds: BLE_STALE_SECONDS, default_grace_seconds: BLE_DEFAULT_GRACE, tags,

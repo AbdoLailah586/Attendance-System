@@ -23,6 +23,7 @@ import AttendanceReports from './AttendanceReports';
 import DayCloseReport from './DayCloseReport';
 import NfcManager from './NfcManager';
 import BleManager from './BleManager';
+import WifiPresenceManager from './WifiPresenceManager';
 import LiveEmployeeCard, { needsPresenceReview, observedBranch } from './LiveEmployeeCard';
 import EmployeeEditor from './EmployeeEditor';
 import AdminPushTester from './AdminPushTester';
@@ -35,7 +36,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({}: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'live' | 'reports' | 'day-close' | 'settings' | 'users' | 'logs' | 'nfc' | 'ble'>('live');
+  const [activeTab, setActiveTab] = useState<'live' | 'reports' | 'day-close' | 'settings' | 'users' | 'logs' | 'nfc' | 'ble' | 'wifi'>('live');
 
   // Live data
   const [liveData, setLiveData] = useState<LiveEmployee[]>([]);
@@ -286,6 +287,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
       <div className="tab-list">
         <button className={`tab-button ${activeTab === 'nfc' ? 'active' : ''}`} onClick={() => setActiveTab('nfc')}>الكروت وقارئات الفروع</button>
         <button className={`tab-button ${activeTab === 'ble' ? 'active' : ''}`} onClick={() => setActiveTab('ble')}>رصد التاج بالبلوتوث</button>
+        <button className={`tab-button ${activeTab === 'wifi' ? 'active' : ''}`} onClick={() => setActiveTab('wifi')}>تتبع واي فاي المحل 📶</button>
         <button className={`tab-button ${activeTab === 'day-close' ? 'active' : ''}`} onClick={() => setActiveTab('day-close')}>التقرير اليومي للموظفين</button>
         <button className={`tab-button ${activeTab === 'logs' ? 'active' : ''}`} onClick={() => setActiveTab('logs')}>كل سجلات الحضور والحركة</button>
         <button
@@ -334,6 +336,7 @@ export default function AdminDashboard({}: AdminDashboardProps) {
       {/* TAB 1: LIVE RADAR & MAP */}
       {activeTab === 'nfc' && <NfcManager users={usersList} />}
       {activeTab === 'ble' && <BleManager users={usersList} />}
+      {activeTab === 'wifi' && <WifiPresenceManager users={usersList} />}
       {activeTab === 'logs' && <AttendanceLogViewer />}
       {activeTab === 'day-close' && <DayCloseReport />}
       {activeTab === 'settings' && <BranchManager onSaved={fetchLiveData} />}

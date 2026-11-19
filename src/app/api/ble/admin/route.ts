@@ -86,9 +86,13 @@ export async function GET(req: NextRequest) {
     const combinedReports=users.rows.filter(u=>tagRows.rows.some(t=>t.user_id===u.id)).map(user=>({user_id:user.id,user_name:user.name,
       ...combinedObservationReport(tagRows.rows,truncated?[]:events.rows,truncated?[]:heartbeats.rows,windows.filter(w=>w.user_id===user.id),devicesRows.rows,user.id,from,to)
     })).filter(report=>report.session_seconds>0);
+    const activeTestSession = (await query<{ tag_address: string; until: Date; started_at: Date }>(
+      'SELECT tag_address, until, started_at FROM ble_test_sessions WHERE is_active=TRUE AND until > NOW() ORDER BY id DESC LIMIT 1'
+    )).rows[0] || null;
     return NextResponse.json({ tags, devices, logs: logs.rows, total: count.rows[0].total, page, unknown_tags: unknownTags.rows, reports,combined_reports:combinedReports,
       from_day: fromDay, to_day: toDay, receiver_stale_seconds: BLE_STALE_SECONDS, experimental: true, max_concurrent_tags: BLE_READER_CAPACITY,
       truncated, server_time: new Date(now).toISOString(),
+      active_test: activeTestSession ? { tag_address: activeTestSession.tag_address, until: new Date(activeTestSession.until).toISOString() } : null,
       meaning: 'رصد التاج أثناء فترة الكارت، وليس إثبات وجود الشخص أو غيابه. الفترات غير المرصودة للمراجعة ولا تخصم تلقائيًا.' }, { headers });
   } catch (error) { console.error('BLE admin read', error); return NextResponse.json({ error: 'تعذر تحميل رصد البلوتوث' }, { status: 503 }); }
 }
@@ -98,12 +102,33 @@ export async function POST(req: NextRequest) {
     const admin = await getActiveSession(req);
     if (admin?.role !== 'admin') return NextResponse.json({ error: 'صلاحيات المدير مطلوبة' }, { status: 403 });
     const body = await req.json().catch(() => null);
-    if (!body || !['assign_tag', 'revoke_tag', 'set_grace', 'start_discovery', 'stop_discovery'].includes(body.action)) return NextResponse.json({ error: 'عملية غير صالحة' }, { status: 400 });
+    if (!body || !['assign_tag', 'revoke_tag', 'set_grace', 'start_discovery', 'stop_discovery', 'start_tag_test', 'stop_tag_test'].includes(body.action)) return NextResponse.json({ error: 'عملية غير صالحة' }, { status: 400 });
     await ensureBleSchema();
     const client = await getPool().connect();
     try {
       await client.query('BEGIN');
       await client.query("SELECT pg_advisory_xact_lock(hashtext('attendance-ble-write'))");
+      if (body.action === 'start_tag_test') {
+        const address = bleAddress(body.address);
+        if (!address) {
+          await client.query('ROLLBACK');
+          return NextResponse.json({ error: 'عنوان التاج غير صالح' }, { status: 400 });
+        }
+        await client.query('UPDATE ble_test_sessions SET is_active=FALSE WHERE is_active=TRUE');
+        const durationSec = Number(body.duration_seconds) || 180;
+        const until = new Date(Date.now() + durationSec * 1000);
+        await client.query(
+          'INSERT INTO ble_test_sessions(device_id, tag_address, started_at, until, started_by, is_active) VALUES($1, $2, NOW(), $3, $4, TRUE)',
+          [body.device_id || null, address, until, admin.id]
+        );
+        await client.query('COMMIT');
+        return NextResponse.json({ success: true, tag_address: address, until: until.toISOString() }, { headers });
+      }
+      if (body.action === 'stop_tag_test') {
+        await client.query('UPDATE ble_test_sessions SET is_active=FALSE WHERE is_active=TRUE');
+        await client.query('COMMIT');
+        return NextResponse.json({ success: true }, { headers });
+      }
       if (body.action === 'start_discovery' || body.action === 'stop_discovery') {
         if (typeof body.device_id !== 'string' || !(await client.query('SELECT id FROM nfc_devices WHERE id=$1 AND is_active=TRUE', [body.device_id])).rows.length) {
           await client.query('ROLLBACK'); return NextResponse.json({ error: 'قارئ غير صالح' }, { status: 400 });

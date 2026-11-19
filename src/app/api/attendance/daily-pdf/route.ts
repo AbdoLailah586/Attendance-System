@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getActiveSession } from '@/lib/auth';
-import { loadDayCloseReport } from '@/lib/day-close-report';
+import { query } from '@/lib/db';
 import { validDay } from '@/lib/time';
+import { computeEmployeeDailyTimeline } from '@/lib/daily-timeline';
 import { dailyReportPdfHtml, renderPdfFromHtml } from '@/lib/report-pdf';
 
 export async function GET(req: NextRequest) {
@@ -16,11 +17,25 @@ export async function GET(req: NextRequest) {
     }
     const date = req.nextUrl.searchParams.get('date');
     if (!date || !validDay(date)) return NextResponse.json({ error: 'تاريخ غير صالح' }, { status: 400 });
-    const data = await loadDayCloseReport(date);
-    const pdf = await renderPdfFromHtml(dailyReportPdfHtml(data.businessDay, data.reports));
-    return new NextResponse(new Uint8Array(pdf), { headers: {
-      'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="daily-report-${date}.pdf"`, 'Cache-Control': 'private, no-store',
-    } });
+
+    const users = (await query<{ id: number; name: string; role: string }>(
+      `SELECT id, name, role FROM users WHERE role = 'employee' AND is_active = TRUE ORDER BY id ASC`
+    )).rows;
+
+    const timelines = await Promise.all(
+      users.map(u => computeEmployeeDailyTimeline(u.id, u.name, u.role, date))
+    );
+
+    const html = dailyReportPdfHtml(date, timelines);
+    const pdf = await renderPdfFromHtml(html);
+
+    return new NextResponse(new Uint8Array(pdf), {
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="daily-report-${date}.pdf"`,
+        'Cache-Control': 'private, no-store',
+      },
+    });
   } catch (error) {
     console.error('Daily PDF failed:', error);
     return NextResponse.json({ error: 'تعذر إنشاء التقرير اليومي' }, { status: 503 });

@@ -1,22 +1,13 @@
-// Renders a full HTML document to a PDF buffer using a real headless Chromium — not a
-// lightweight PDF-drawing library — specifically so Arabic text gets proper letter-joining.
-// On Vercel (Linux serverless) this uses @sparticuz/chromium's bundled binary via
-// puppeteer-core; locally (this dev machine is Windows) it falls back to full `puppeteer`,
-// which downloads its own OS-appropriate Chromium — so this can be exercised in local dev too.
-//
-// @sparticuz/chromium's minimal build ships with NO Arabic fonts installed (confirmed in
-// production: labels rendered as blank glyphs, only digits/Latin text showed). The fix is to
-// embed an Arabic font directly in the page as a base64 data URI, so rendering never depends
-// on whatever fonts happen to exist on the machine running Chromium.
+// Renders a full HTML document to a PDF buffer using headless Chromium for Arabic letter-joining.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { EmployeeDailyTimeline, TimelineSegment } from './daily-timeline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FONT_DIR = path.join(__dirname, 'fonts');
 let fontFaceCss: string | undefined;
 
-// Cairo (SIL Open Font License — see src/lib/fonts/OFL.txt), embedded once per process.
 function loadFontFaceCss(): string {
   if (fontFaceCss) return fontFaceCss;
   const weights: [string, number][] = [['Cairo-Regular.ttf', 400], ['Cairo-SemiBold.ttf', 600], ['Cairo-Bold.ttf', 700]];
@@ -33,10 +24,13 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load' });
-    await page.evaluateHandle('document.fonts.ready'); // embedded @font-face must finish loading before paint
+    await page.evaluateHandle('document.fonts.ready');
     const pdf = await page.pdf({
-      format: 'A4', printBackground: true, margin: { top: '18mm', bottom: '16mm', left: '14mm', right: '14mm' },
-      displayHeaderFooter: true, headerTemplate: '<span></span>',
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '12mm', bottom: '12mm', left: '12mm', right: '12mm' },
+      displayHeaderFooter: true,
+      headerTemplate: '<span></span>',
       footerTemplate: `<div style="width:100%;font-size:9px;color:#94a3b8;text-align:center;font-family:Arial,sans-serif;">
         <span class="pageNumber"></span> / <span class="totalPages"></span></div>`,
     });
@@ -56,161 +50,531 @@ async function launchLocal() {
   return puppeteer.launch({ headless: true });
 }
 
-// Design system: one accent blue, a slate neutral scale, and the three gap labels already
-// used on-screen in AttendanceReports.tsx (kept identical so the PDF reads as the same
-// product, not a different tool). Stat tiles are a fixed CSS grid so the layout never
-// reflows between reports — only the numbers inside it change, as requested.
-const INK = '#0f172a', MUTED = '#64748b', BORDER = '#e2e8f0', ACCENT_DARK = '#1d4ed8', SOFT_BG = '#f8fafc';
 export const PDF_STYLES = `
   ${loadFontFaceCss()}
   * { box-sizing: border-box; }
-  body { font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; text-align: right; color: ${INK}; margin: 0; padding: 0; font-size: 13px; line-height: 1.5; }
-  .masthead { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid ${ACCENT_DARK}; padding-bottom: 14px; margin-bottom: 22px; }
-  .masthead .brand { font-size: 11px; color: ${MUTED}; font-weight: 600; letter-spacing: 0.3px; }
-  .masthead h1 { font-size: 21px; font-weight: 700; margin: 2px 0 0; color: ${ACCENT_DARK}; }
-  .masthead .meta-box { text-align: left; font-size: 10.5px; color: ${MUTED}; direction: ltr; }
-  .masthead .meta-box div { margin-bottom: 2px; }
-  .employee-card { page-break-inside: avoid; border: 1px solid ${BORDER}; border-radius: 10px; margin-bottom: 18px; overflow: hidden; }
-  .employee-head { background: ${SOFT_BG}; border-bottom: 1px solid ${BORDER}; padding: 10px 16px; display: flex; align-items: baseline; justify-content: space-between; }
-  .employee-head h2 { font-size: 15px; font-weight: 700; margin: 0; }
-  .employee-head .username { font-size: 11px; color: ${MUTED}; direction: ltr; unicode-bidi: isolate; }
-  .employee-head .range { font-size: 10.5px; color: ${MUTED}; direction: ltr; }
-  .employee-body { padding: 14px 16px 16px; }
-  .headline-banner { display: flex; align-items: center; justify-content: space-between; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; margin-bottom: 4px; }
-  .headline-banner span { font-weight: 700; color: #991b1b; font-size: 12.5px; }
-  .headline-banner strong { font-size: 17px; color: #991b1b; }
-  .stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 14px; }
-  .stat-grid.secondary { grid-template-columns: repeat(2, 1fr); max-width: 50%; margin-right: auto; }
-  .stat { border: 1px solid ${BORDER}; border-radius: 8px; padding: 8px 10px; background: #fff; }
-  .stat .stat-label { font-size: 10px; color: ${MUTED}; font-weight: 600; display: block; margin-bottom: 4px; }
-  .stat .stat-value { font-size: 15px; font-weight: 700; color: ${INK}; }
-  .stat.accent-prayer .stat-value { color: #7c3aed; }
-  .stat.accent-unknown .stat-value { color: #b91c1c; }
-  h3.block-title { font-size: 11.5px; font-weight: 700; color: ${MUTED}; margin: 14px 0 6px; text-transform: none; }
-  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-  th, td { border: 1px solid ${BORDER}; padding: 6px 9px; text-align: right; }
-  th { background: ${SOFT_BG}; font-weight: 700; color: ${INK}; font-size: 10.5px; }
-  tbody tr:nth-child(even) td { background: #fafbfc; }
-  td.ltr-cell { direction: ltr; unicode-bidi: isolate; text-align: left; }
-  .empty-note { color: ${MUTED}; font-size: 11.5px; padding: 8px 2px; margin: 0; }
-  .label-unknown { color: #b91c1c; font-weight: 600; }
-  .label-prayer { color: #7c3aed; font-weight: 600; }
-  .label-outside { color: #92400e; font-weight: 600; }
+  body {
+    font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+    direction: rtl;
+    text-align: right;
+    color: #0f172a;
+    background: #ffffff;
+    margin: 0;
+    padding: 0;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .employee-page {
+    page-break-after: always;
+    min-height: 98vh;
+    padding-bottom: 20px;
+  }
+  .employee-page:last-child {
+    page-break-after: auto;
+  }
+  .masthead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid #2563eb;
+    padding-bottom: 10px;
+    margin-bottom: 14px;
+  }
+  .masthead .brand {
+    font-size: 10px;
+    color: #64748b;
+    font-weight: 600;
+  }
+  .masthead h1 {
+    font-size: 18px;
+    font-weight: 700;
+    margin: 2px 0;
+    color: #1e3a8a;
+  }
+  .masthead .subtitle {
+    font-size: 10.5px;
+    color: #475569;
+  }
+  .meta-box {
+    text-align: left;
+    font-size: 11px;
+    direction: ltr;
+  }
+  .badge-present {
+    background: #dcfce7;
+    color: #15803d;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 11px;
+    direction: rtl;
+    display: inline-block;
+  }
+  .badge-absent {
+    background: #fee2e2;
+    color: #b91c1c;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 11px;
+    direction: rtl;
+    display: inline-block;
+  }
+
+  /* Stats Grid Outside Ruler */
+  .stat-grid-main {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .stat-box {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: #f8fafc;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .stat-box.primary {
+    background: #f0fdf4;
+    border-color: #bbf7d0;
+  }
+  .stat-box.prayer {
+    background: #fefce8;
+    border-color: #fef08a;
+  }
+  .stat-box.unexcused {
+    background: #fef2f2;
+    border-color: #fecaca;
+  }
+  .stat-label {
+    font-size: 9.5px;
+    color: #64748b;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .stat-val {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .highlight-green { color: #16a34a; }
+  .highlight-yellow { color: #b45309; }
+  .highlight-red { color: #dc2626; }
+  .highlight-blue { color: #2563eb; }
+  .highlight-purple { color: #7c3aed; }
+
+  /* Ruler Section */
+  .ruler-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: #ffffff;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  }
+  .ruler-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ruler-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #1e293b;
+  }
+  .ruler-legend {
+    display: flex;
+    gap: 12px;
+    font-size: 10px;
+    color: #475569;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+  .dot.green { background: #16a34a; }
+  .dot.yellow { background: #eab308; }
+  .dot.red { background: #dc2626; }
+  .dot.gray { background: #cbd5e1; }
+  .dot.blue { background: #2563eb; }
+  .dot.purple { background: #9333ea; }
+  .dot.lightgray { background: #f1f5f9; border: 1px solid #cbd5e1; }
+
+  .ruler-wrapper {
+    position: relative;
+    padding-top: 26px;
+    padding-bottom: 10px;
+    margin: 0 4px;
+  }
+  .ruler-ticks {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 24px;
+  }
+  .tick {
+    position: absolute;
+    transform: translateX(50%);
+    text-align: center;
+    font-size: 8.5px;
+    color: #64748b;
+    font-weight: 600;
+    white-space: nowrap;
+    direction: ltr;
+  }
+  .tick::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    width: 1px;
+    height: 6px;
+    background: #cbd5e1;
+  }
+  .tick.shift-start {
+    color: #16a34a;
+    font-weight: 700;
+  }
+  .tick.shift-start::after {
+    background: #16a34a;
+    height: 8px;
+    width: 2px;
+  }
+  .tick.shift-end {
+    color: #dc2626;
+    font-weight: 700;
+  }
+  .tick.shift-end::after {
+    background: #dc2626;
+    height: 8px;
+    width: 2px;
+  }
+
+  .ruler-bar-track {
+    position: relative;
+    height: 28px;
+    border-radius: 6px;
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    overflow: visible;
+  }
+  .ruler-seg {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    height: 100%;
+  }
+  .ruler-seg.seg-present { background: #16a34a; }
+  .ruler-seg.seg-prayer_absent { background: #eab308; }
+  .ruler-seg.seg-absent { background: #dc2626; }
+  .ruler-seg.seg-off_session { background: #e2e8f0; }
+  .ruler-seg.seg-branch1 { background: #2563eb; }
+  .ruler-seg.seg-branch2 { background: #9333ea; }
+  .ruler-seg.seg-outside { background: #f8fafc; }
+
+  /* Pin Markers for Clock-In & Clock-Out */
+  .marker-pin {
+    position: absolute;
+    top: -18px;
+    bottom: -6px;
+    width: 2px;
+    z-index: 10;
+    pointer-events: none;
+    transform: translateX(50%);
+  }
+  .marker-pin.pin-in {
+    background: #1e3a8a;
+  }
+  .marker-pin.pin-out {
+    background: #b91c1c;
+  }
+  .pin-badge {
+    position: absolute;
+    top: -14px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1e3a8a;
+    color: #ffffff;
+    font-size: 8px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 4px;
+    white-space: nowrap;
+    direction: rtl;
+  }
+  .marker-pin.pin-out .pin-badge {
+    background: #b91c1c;
+  }
+
+  /* Transition Table */
+  .table-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-top: 10px;
+  }
+  .table-header {
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 6px 12px;
+    font-weight: 700;
+    font-size: 11px;
+    color: #475569;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+  }
+  th, td {
+    padding: 5px 10px;
+    border-bottom: 1px solid #f1f5f9;
+    text-align: right;
+  }
+  th {
+    background: #ffffff;
+    font-weight: 700;
+    color: #64748b;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  tr:last-child td {
+    border-bottom: none;
+  }
+  td.ltr-cell {
+    direction: ltr;
+    text-align: left;
+  }
 `;
 
-export function pageShell(title: string, generatedAt: string, dateRange: string, bodyHtml: string): string {
-  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${title}</title><style>${PDF_STYLES}</style></head>
-    <body>
-      <header class="masthead">
-        <div><div class="brand">نظام الحضور والانصراف</div><h1>${title}</h1></div>
-        <div class="meta-box"><div>${dateRange}</div><div>Generated ${generatedAt}</div></div>
-      </header>
-      ${bodyHtml}
-    </body></html>`;
-}
-
-const TIMELINE_LABEL_CLASS: Record<string, string> = { unknown: 'label-unknown', prayer: 'label-prayer', outside: 'label-outside' };
-const arabicTime = (iso: string) => new Date(iso).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
-const ltr = (text: string) => `<span dir="ltr">${text}</span>`;
-
-export interface PdfTimelineEntry { branch_id: string; branch_name: string; start: string; end: string; durationFormatted: string }
-export function timelineTableHtml(timeline: PdfTimelineEntry[]): string {
-  if (!timeline.length) return '<p class="empty-note">لا توجد فجوات أو استثناءات مسجلة في هذه الفترة.</p>';
-  const rows = timeline.map(t => {
-    const cls = TIMELINE_LABEL_CLASS[t.branch_id] || '';
-    return `<tr><td class="${cls}">${t.branch_name}</td><td class="ltr-cell">${arabicTime(t.start)}</td><td class="ltr-cell">${arabicTime(t.end)}</td><td>${t.durationFormatted}</td></tr>`;
+function renderRulerBar(
+  title: string,
+  legendHtml: string,
+  segments: TimelineSegment[],
+  typeClassPrefix: 'seg-' | 'branch-',
+  clockInPercent: number | null = null,
+  clockInText: string | null = null,
+  clockOutPercent: number | null = null,
+  clockOutText: string | null = null
+): string {
+  const segDivs = segments.map(s => {
+    const width = Math.max(0.1, s.endPercent - s.startPercent);
+    // RTL positioning: on RTL page, left or right. We can use left with LTR wrapper or right in RTL!
+    // Using left % with direction: ltr wrapper guarantees exact 15:00 to 01:00 progression from left to right.
+    const keyClass = typeClassPrefix === 'branch-' ? `seg-${s.branchId || 'outside'}` : `seg-${s.type}`;
+    return `<div class="ruler-seg ${keyClass}" style="left: ${s.startPercent.toFixed(2)}%; width: ${width.toFixed(2)}%;" title="${s.label} (${s.startTime} - ${s.endTime})"></div>`;
   }).join('');
-  return `<table><thead><tr><th>الحالة</th><th>من</th><th>إلى</th><th>المدة</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
 
-const STATUS_LABELS: Record<string, string> = { present: 'حاضر', absent: 'غائب', off: 'راحة أسبوعية', pending: 'الشيفت لم ينتهِ', upcoming: 'لم يبدأ الشيفت', unverified: 'حضور غير مؤكد', untracked: 'خارج فترة المتابعة' };
+  let markersHtml = '';
+  if (clockInPercent !== null && clockInPercent >= 0 && clockInPercent <= 100) {
+    markersHtml += `
+      <div class="marker-pin pin-in" style="left: ${clockInPercent.toFixed(2)}%;">
+        <div class="pin-badge">حضور ${clockInText || ''}</div>
+      </div>
+    `;
+  }
+  if (clockOutPercent !== null && clockOutPercent >= 0 && clockOutPercent <= 100) {
+    markersHtml += `
+      <div class="marker-pin pin-out" style="left: ${clockOutPercent.toFixed(2)}%;">
+        <div class="pin-badge">انصراف ${clockOutText || ''}</div>
+      </div>
+    `;
+  }
 
-function statTile(label: string, value: string, variant?: 'prayer' | 'unknown'): string {
-  const cls = variant ? ` accent-${variant}` : '';
-  return `<div class="stat${cls}"><span class="stat-label">${label}</span><span class="stat-value">${value}</span></div>`;
-}
-
-interface PeriodReportDay {
-  date: string; status: string; firstArrival: string | null; lastDeparture: string | null;
-  summary: { cardMinutes: number; cardFormatted: string }; timeline: PdfTimelineEntry[];
-}
-interface PeriodReportLike {
-  user: { name: string; username: string }; start: string | null; end: string | null;
-  summary: { total: { formatted: string }; card: { formatted: string }; regular: { formatted: string }; overtime: { formatted: string };
-    outside: { formatted: string }; unknown: { formatted: string }; prayer: { formatted: string };
-    absenceTotal: { formatted: string }; absentShiftMinutes: { formatted: string } };
-  days: PeriodReportDay[];
-}
-
-function employeeSectionHtml(report: PeriodReportLike): string {
-  const dayRows = report.days.map(d => `<tr><td class="ltr-cell">${d.date}</td><td>${STATUS_LABELS[d.status] || d.status}</td>
-      <td class="ltr-cell">${d.firstArrival ? arabicTime(d.firstArrival) : '—'}</td><td class="ltr-cell">${d.lastDeparture ? arabicTime(d.lastDeparture) : '—'}</td><td>${d.summary.cardFormatted}</td></tr>`).join('');
-  const gaps = report.days.flatMap(d => d.timeline.filter(t => t.branch_id === 'unknown' || t.branch_id === 'prayer'));
-  return `<section class="employee-card">
-    <div class="employee-head">
-      <h2>${report.user.name} <span class="username">(${report.user.username})</span></h2>
-      <span class="range">${ltr((report.start || '') + ' — ' + (report.end || ''))}</span>
+  return `
+    <div class="ruler-card">
+      <div class="ruler-header">
+        <div class="ruler-title">${title}</div>
+        <div class="ruler-legend">${legendHtml}</div>
+      </div>
+      <div class="ruler-wrapper" style="direction: ltr;">
+        <div class="ruler-ticks">
+          <div class="tick" style="left: 0%;"><span>03:00 PM</span></div>
+          <div class="tick shift-start" style="left: 10%;"><span>04:00 PM<br><b>بداية الشيفت</b></span></div>
+          <div class="tick" style="left: 20%;"><span>05:00 PM</span></div>
+          <div class="tick" style="left: 30%;"><span>06:00 PM</span></div>
+          <div class="tick" style="left: 40%;"><span>07:00 PM</span></div>
+          <div class="tick" style="left: 50%;"><span>08:00 PM</span></div>
+          <div class="tick" style="left: 60%;"><span>09:00 PM</span></div>
+          <div class="tick" style="left: 70%;"><span>10:00 PM</span></div>
+          <div class="tick" style="left: 80%;"><span>11:00 PM</span></div>
+          <div class="tick shift-end" style="left: 90%;"><span>12:00 AM<br><b>نهاية الشيفت</b></span></div>
+          <div class="tick" style="left: 100%;"><span>01:00 AM</span></div>
+        </div>
+        <div class="ruler-bar-track">
+          ${segDivs}
+          ${markersHtml}
+        </div>
+      </div>
     </div>
-    <div class="employee-body">
-      <div class="headline-banner">
-        <span>إجمالي الغياب وعدم التواجد الفعلي (الرقم النهائي)</span>
-        <strong>${report.summary.absenceTotal.formatted}</strong>
-      </div>
-      <p class="empty-note">يجمع أيام الغياب الكاملة (${report.summary.absentShiftMinutes.formatted}) وفجوات التتبع أثناء الشيفت (${report.summary.unknown.formatted})، باستثناء وقت الصلاة.</p>
-      <div class="stat-grid">
-        ${statTile('إجمالي الوقت', report.summary.total.formatted)}
-        ${statTile('فترة الكارت', report.summary.card.formatted)}
-        ${statTile('الأساسي', report.summary.regular.formatted)}
-        ${statTile('الإضافي', report.summary.overtime.formatted)}
-        ${statTile('خارج الفروع', report.summary.outside.formatted)}
-      </div>
-      <div class="stat-grid secondary">
-        ${statTile('فجوات تتبع', report.summary.unknown.formatted, 'unknown')}
-        ${statTile('مستثنى (وقت الصلاة)', report.summary.prayer.formatted, 'prayer')}
-      </div>
-      <h3 class="block-title">تفاصيل الأيام</h3>
-      <table><thead><tr><th>اليوم</th><th>الحالة</th><th>أول وصول</th><th>آخر انصراف</th><th>فترة الكارت</th></tr></thead><tbody>${dayRows}</tbody></table>
-      <h3 class="block-title">فترات عدم التواجد (فجوات التتبع والاستثناءات)</h3>
-      ${timelineTableHtml(gaps)}
-    </div>
-  </section>`;
+  `;
 }
 
-export function periodReportPdfHtml(reports: PeriodReportLike[], title: string): string {
+function renderEmployeePage(t: EmployeeDailyTimeline, generatedAt: string): string {
+  const statusLegend = `
+    <span class="legend-item"><span class="dot green"></span> حاضر بالبلوتوث</span>
+    <span class="legend-item"><span class="dot yellow"></span> خارج المحل (أثناء الصلاة)</span>
+    <span class="legend-item"><span class="dot red"></span> غير متواجد (خارج الصلاة)</span>
+    <span class="legend-item"><span class="dot gray"></span> خارج فترة الدوام</span>
+  `;
+
+  const branchLegend = `
+    <span class="legend-item"><span class="dot blue"></span> المحل الأول (الرئيسي)</span>
+    <span class="legend-item"><span class="dot purple"></span> المحل الثاني (الجملة)</span>
+    <span class="legend-item"><span class="dot lightgray"></span> خارج الفروع</span>
+  `;
+
+  const statusRulerHtml = renderRulerBar(
+    'مسطرة التواجد وحالة الحضور (تتبع البلوتوث BLE فقط بدون لوكيشن)',
+    statusLegend,
+    t.statusSegments,
+    'seg-',
+    t.clockInPercent,
+    t.stats.clockInFormatted,
+    t.clockOutPercent,
+    t.stats.clockOutFormatted
+  );
+
+  const branchRulerHtml = renderRulerBar(
+    'مسطرة التواجد بين الفروع (المحل الأول vs المحل الثاني)',
+    branchLegend,
+    t.branchSegments,
+    'branch-'
+  );
+
+  // Filter meaningful segments for the table (duration >= 1 min)
+  const tableRows = t.statusSegments
+    .filter(s => s.durationMinutes >= 1)
+    .map(s => {
+      let badgeCls = 'highlight-green';
+      if (s.type === 'prayer_absent') badgeCls = 'highlight-yellow';
+      else if (s.type === 'absent') badgeCls = 'highlight-red';
+      else if (s.type === 'off_session') badgeCls = '';
+
+      return `<tr>
+        <td class="${badgeCls}"><strong>${s.label}</strong></td>
+        <td class="ltr-cell">${s.startTime}</td>
+        <td class="ltr-cell">${s.endTime}</td>
+        <td>${s.durationMinutes} دقيقة</td>
+        <td>${s.type === 'prayer_absent' ? 'مستثنى ومقبول (فترة الصلاة)' : (s.type === 'absent' ? 'فجوة تتبع / غير متواجد' : '—')}</td>
+      </tr>`;
+    }).join('');
+
+  return `
+    <div class="employee-page">
+      <header class="masthead">
+        <div>
+          <div class="brand">نظام الحضور والانصراف • جو ستور</div>
+          <h1>التقرير اليومي: ${t.userName}</h1>
+          <div class="subtitle">الشيفت الرسمي: 04:00 عصراً إلى 12:00 منتصف الليل • نافذة الانصراف المتاحة حتى 01:00 صباحاً</div>
+        </div>
+        <div class="meta-box">
+          <div style="font-weight: 700; color: #1e3a8a; margin-bottom: 4px;">${t.day}</div>
+          <div><span class="${t.clockIn ? 'badge-present' : 'badge-absent'}">${t.clockIn ? 'سجل حضور بالكارت' : 'لم يسجل كارت'}</span></div>
+        </div>
+      </header>
+
+      <!-- Outside Numbers & Stats Grid -->
+      <div class="stat-grid-main">
+        <div class="stat-box primary">
+          <span class="stat-label">🕒 إجمالي الحضور الفعلي (بلوتوث)</span>
+          <span class="stat-val highlight-green">${t.stats.totalPresentFormatted}</span>
+        </div>
+        <div class="stat-box prayer">
+          <span class="stat-label">🕌 عدم التواجد في أوقات الصلاة</span>
+          <span class="stat-val highlight-yellow">${t.stats.prayerAbsentFormatted}</span>
+        </div>
+        <div class="stat-box unexcused">
+          <span class="stat-label">⚠️ عدم التواجد خارج أوقات الصلاة</span>
+          <span class="stat-val highlight-red">${t.stats.unexcusedAbsentFormatted}</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">🏬 إجمالي المحل الأول (الرئيسي)</span>
+          <span class="stat-val highlight-blue">${t.stats.branch1Formatted}</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">🏪 إجمالي المحل الثاني (الجملة)</span>
+          <span class="stat-val highlight-purple">${t.stats.branch2Formatted}</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">🏷️ وقت تسجيل الحضور</span>
+          <span class="stat-val">${t.stats.clockInFormatted}</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">🏷️ وقت تسجيل الانصراف</span>
+          <span class="stat-val">${t.stats.clockOutFormatted}</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-label">📅 دورة الشهر الحسابية</span>
+          <span class="stat-val" style="font-size: 13px;">تبدأ يوم 20 من كل شهر</span>
+        </div>
+      </div>
+
+      <!-- RULER 1: Presence & Prayer Status -->
+      ${statusRulerHtml}
+
+      <!-- RULER 2: Branches -->
+      ${branchRulerHtml}
+
+      <!-- Table -->
+      <div class="table-card">
+        <div class="table-header">سجل الفترات الزمنية التفصيلي للموظف</div>
+        <table>
+          <thead>
+            <tr>
+              <th>الحالة</th>
+              <th>من</th>
+              <th>إلى</th>
+              <th>المدة</th>
+              <th>ملاحظات</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows || '<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding: 12px;">لا توجد فترات مسجلة</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+export function dailyReportPdfHtml(businessDay: string, timelines: EmployeeDailyTimeline[]): string {
+  const generatedAt = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' });
+  const pagesHtml = timelines.map(t => renderEmployeePage(t, generatedAt)).join('');
+
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>التقرير اليومي الشامل - ${businessDay}</title>
+  <style>${PDF_STYLES}</style>
+</head>
+<body>
+  ${pagesHtml}
+</body>
+</html>`;
+}
+
+// Keep legacy interfaces for backwards compatibility with period reports
+export interface PdfTimelineEntry { branch_id: string; branch_name: string; start: string; end: string; durationFormatted: string }
+export function periodReportPdfHtml(reports: any[], title: string): string {
   const range = reports[0] ? `${reports[0].start || ''} — ${reports[0].end || ''}` : '';
   const generatedAt = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' });
-  return pageShell(title, generatedAt, range, reports.map(employeeSectionHtml).join(''));
-}
-
-interface DayCloseReportLike {
-  user: { name: string; username: string }; firstArrival: string | null; lastDeparture: string | null;
-  summary: { cardFormatted: string; unknownFormatted: string; prayerFormatted: string; outsideFormatted: string };
-  timeline: PdfTimelineEntry[];
-}
-function dayCloseSectionHtml(report: DayCloseReportLike): string {
-  const gaps = report.timeline.filter(t => t.branch_id === 'unknown' || t.branch_id === 'prayer');
-  return `<section class="employee-card">
-    <div class="employee-head">
-      <h2>${report.user.name} <span class="username">(${report.user.username})</span></h2>
-    </div>
-    <div class="employee-body">
-      <div class="stat-grid">
-        ${statTile('أول وصول', report.firstArrival ? arabicTime(report.firstArrival) : 'لم يحضر')}
-        ${statTile('آخر انصراف', report.lastDeparture ? arabicTime(report.lastDeparture) : '—')}
-        ${statTile('فترة الكارت', report.summary.cardFormatted)}
-        ${statTile('خارج الفروع', report.summary.outsideFormatted)}
-      </div>
-      <div class="stat-grid secondary">
-        ${statTile('فجوات تتبع', report.summary.unknownFormatted, 'unknown')}
-        ${statTile('مستثنى (وقت الصلاة)', report.summary.prayerFormatted, 'prayer')}
-      </div>
-      <h3 class="block-title">فترات عدم التواجد (فجوات التتبع والاستثناءات)</h3>
-      ${timelineTableHtml(gaps)}
-    </div>
-  </section>`;
-}
-
-export function dailyReportPdfHtml(businessDay: string, reports: DayCloseReportLike[]): string {
-  const generatedAt = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' });
-  return pageShell('التقرير اليومي الشامل', generatedAt, businessDay, reports.map(dayCloseSectionHtml).join(''));
+  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${title}</title><style>${PDF_STYLES}</style></head>
+    <body><header class="masthead"><div><div class="brand">نظام الحضور والانصراف</div><h1>${title}</h1></div>
+    <div class="meta-box"><div>${range}</div><div>Generated ${generatedAt}</div></div></header>
+    </body></html>`;
 }

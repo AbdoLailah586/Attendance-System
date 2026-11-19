@@ -13,9 +13,11 @@ type Device = { id: string; name: string; branch_name: string; receiver_state: '
 type Sighting = { address: string; rssi: number | null; name: string | null; last_seen_at: string };
 type Discovery = { active: boolean; until: string | null; sightings: Sighting[]; secondsLeft: number };
 type Log = { id: string; state: 'seen' | 'not_seen'; tag_address: string; recorded_at: string; received_at: string; user_name: string | null; branch_name: string; status: string; rssi: number | null };
+type ActiveTest = { tag_address: string; until: string };
 type Report = { user_id: number; user_name: string; device_id: string; device_name: string; branch_name: string; observed_seconds: number; not_seen_seconds: number; unknown_seconds: number; session_seconds: number };
 type CombinedReport = { user_id: number; user_name: string; observed_seconds: number; not_seen_seconds: number; unknown_seconds: number; session_seconds: number };
 type Data = { tags: Tag[]; devices: Device[]; logs: Log[]; total: number; page: number; reports: Report[]; combined_reports?: CombinedReport[]; truncated: boolean;
+  active_test?: ActiveTest | null;
   unknown_tags: { tag_address: string; recorded_at: string; branch_name: string }[] };
 
 const dateTime = (value: string | null) => value ? new Date(value).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' }) : 'لا توجد قراءة';
@@ -28,6 +30,75 @@ export default function BleManager({ users }: { users: AppUser[] }) {
   const [fromDay, setFromDay] = useState(localDate), [toDay, setToDay] = useState(localDate), [page, setPage] = useState(1), [reportUser, setReportUser] = useState('all');
   const [address, setAddress] = useState(''), [userId, setUserId] = useState(''), [grace, setGrace] = useState(90);
   const [discoveryDeviceId, setDiscoveryDeviceId] = useState(''), [discovery, setDiscovery] = useState<Discovery | null>(null), [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [activeTest, setActiveTest] = useState<ActiveTest | null>(null), [testSecondsLeft, setTestSecondsLeft] = useState(0);
+  const [testCustomAddress, setTestCustomAddress] = useState(''), [testBusy, setTestBusy] = useState(false);
+
+  useEffect(() => {
+    if (data?.active_test) {
+      setActiveTest(data.active_test);
+      const remaining = Math.max(0, Math.round((new Date(data.active_test.until).getTime() - Date.now()) / 1000));
+      setTestSecondsLeft(remaining);
+    } else {
+      setActiveTest(null);
+      setTestSecondsLeft(0);
+    }
+  }, [data?.active_test]);
+
+  useEffect(() => {
+    if (!activeTest || testSecondsLeft <= 0) return;
+    const interval = setInterval(() => {
+      setTestSecondsLeft(prev => {
+        if (prev <= 1) {
+          setActiveTest(null);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [activeTest, testSecondsLeft]);
+
+  const startTagTest = async (targetAddr: string) => {
+    if (!targetAddr) return;
+    setTestBusy(true); setMessage('');
+    try {
+      const response = await fetch('/api/ble/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start_tag_test', address: targetAddr }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      setActiveTest({ tag_address: result.tag_address, until: result.until });
+      setTestSecondsLeft(180);
+      setMessage(`بدأ أمر الاتصال بالتاج [${result.tag_address}]. انتظر ثوانٍ وسيصدر التاج صوتاً/Beep لمعرفته.`);
+      await load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'تعذر بدء الفحص');
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
+  const stopTagTest = async () => {
+    setTestBusy(true); setMessage('');
+    try {
+      const response = await fetch('/api/ble/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'stop_tag_test' }),
+      });
+      await response.json().catch(() => null);
+      setActiveTest(null);
+      setTestSecondsLeft(0);
+      setMessage('تم إيقاف أمر الاتصال وفصل التاج.');
+      await load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'تعذر إيقاف الفحص');
+    } finally {
+      setTestBusy(false);
+    }
+  };
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const params = new URLSearchParams({ from_day: fromDay, to_day: toDay, page: String(page) });
@@ -99,6 +170,71 @@ export default function BleManager({ users }: { users: AppUser[] }) {
       {error && <p role="alert" style={{ color: '#b91c1c' }}>{error}</p>}
     </div>
     <ReaderStatusPanel />
+    <div className="card" style={{ padding: 20, border: '2px solid #3b82f6', background: '#f8fafc' }}>
+      <div className="section-title">
+        <h3 style={{ color: '#1e40af', margin: 0 }}>🔔 أداة فحص واختبار التاجات لمعرفة صاحبها (BLE Tag Identifier)</h3>
+        {activeTest && (
+          <span style={{ background: '#fef08a', color: '#854d0e', padding: '4px 10px', borderRadius: 999, fontWeight: 700, fontSize: 12 }}>
+            جاري فحص: {activeTest.tag_address} (متبقي {testSecondsLeft} ثانية)
+          </span>
+        )}
+      </div>
+      <p style={{ marginTop: 8, color: '#334155' }}>
+        لو التاجات كلها شبه بعض ونسيت ترقمهم: اضغط على <strong>«فحص واتصال»</strong> جنب اسم الموظف؛ القارئ هيتصل فوراً بالتاج دي، والتاج هترن/تصفر (Beep) وتقدر تعرفها وترقمها، وبعدها تدوس <strong>«قطع الاتصال»</strong> وتجرب اللي بعدها!
+      </p>
+
+      {/* List of Registered Tags */}
+      <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+        {data?.tags.map(tag => {
+          const isTestingThis = activeTest?.tag_address.toUpperCase() === tag.address.toUpperCase();
+          return (
+            <div key={tag.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: isTestingThis ? '#eff6ff' : '#ffffff', border: isTestingThis ? '2px solid #2563eb' : '1px solid #e2e8f0', borderRadius: 8 }}>
+              <div>
+                <strong style={{ fontSize: 14, color: '#0f172a' }}>{tag.name}</strong>
+                <span dir="ltr" style={{ marginInlineStart: 12, color: '#64748b', fontFamily: 'monospace', fontWeight: 600 }}>{tag.address}</span>
+              </div>
+              <div>
+                {isTestingThis ? (
+                  <button className="btn btn-danger btn-sm" disabled={testBusy} onClick={() => void stopTagTest()}>
+                    ⏹️ قطع الاتصال ({testSecondsLeft} ث)
+                  </button>
+                ) : (
+                  <button className="btn btn-primary btn-sm" disabled={testBusy || !!activeTest} onClick={() => void startTagTest(tag.address)}>
+                    🔔 فحص واتصال (Connect & Identify)
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {(!data?.tags || data.tags.length === 0) && <p className="muted">لا توجد تاجات مربوطة حالياً.</p>}
+      </div>
+
+      {/* Custom Address Input (e.g. user's phone BLE address) */}
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px dashed #cbd5e1', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>
+          أو جرّب عنوان بلوتوث مخصص (مثل موبايلك 28:BB:B2:1E:48:F5):
+          <input
+            className="form-input"
+            dir="ltr"
+            placeholder="XX:XX:XX:XX:XX:XX"
+            value={testCustomAddress}
+            onChange={e => setTestCustomAddress(e.target.value)}
+            style={{ width: 220, marginInlineStart: 8 }}
+          />
+        </label>
+        {activeTest?.tag_address.toUpperCase() === testCustomAddress.trim().toUpperCase() ? (
+          <button className="btn btn-danger btn-sm" disabled={testBusy} onClick={() => void stopTagTest()}>
+            ⏹️ قطع الاتصال ({testSecondsLeft} ث)
+          </button>
+        ) : (
+          <button className="btn btn-secondary btn-sm" disabled={testBusy || !testCustomAddress.trim() || !!activeTest} onClick={() => void startTagTest(testCustomAddress.trim())}>
+            🔔 فحص العنوان المخصص
+          </button>
+        )}
+      </div>
+      {message && <p role="status" style={{ marginTop: 10, color: '#1d4ed8', fontWeight: 600 }}>{message}</p>}
+    </div>
     <div className="card" style={{ padding: 20 }}>
       <h3>اكتشاف تاج جديد قبل الربط</h3>
       <p className="muted">شغّل التاج الجديدة بس وأطفئ باقي التاجات، اختار القارئ القريب منها، وابدأ الاكتشاف. القارئ بياخد شوية (لحد دقيقة تقريبًا) علشان يستلم أمر الاكتشاف من السيرفر، وبعدها بيفضل يدور لمدة {BLE_DISCOVERY_SECONDS} ثانية. لو العنوان مش ظاهر، دوس «ابدأ الاكتشاف» تاني. لو التاج بيبعت اسمه هيظهر جنب العنوان، لكن أغلب التاجات الرخيصة مش بتبعت اسم أصلًا؛ في الحالة دي استخدم «قوة الإشارة» (الأقرب للصفر = الأقرب فعليًا للقارئ).</p>
